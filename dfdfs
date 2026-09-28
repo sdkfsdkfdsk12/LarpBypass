@@ -1,4 +1,4 @@
--- peak zon | v2.0
+-- peak zone1 | v2.0
 -- RightShift - открыть/закрыть (клавишу можно поменять в Settings)
 -- или клик по вотермарку сверху слева (его можно таскать)
 
@@ -3193,6 +3193,8 @@ local tOnline = addTab("Online", "wing", "who else uses peak zone")
 sideCanvas()
 local tOthers = addTab("Server", "globe", "server and utilities")
 
+local notify -- уведомления (сама функция ниже; тумблеры выше по файлу её уже зовут)
+
 local player1 = addSection(tMove, "Player")
 player1:Slider("WalkSpeed", 16, 150, 16, function(v) cfg.speed = v end)
 player1:Slider("JumpPower", 50, 250, 50, function(v) cfg.jump = v end)
@@ -3243,7 +3245,7 @@ local function restack()
 	end
 end
 
-local function notify(head, body)
+notify = function(head, body)
 	if cfgLoading then return end
 	local accent, kind = toastStyle(head)
 
@@ -9442,8 +9444,63 @@ end)()
 -- а на этот момент прыгаем ему за спину, чтобы не мешали стены; камера стоит на месте
 ;(function()
 	local shotCF, wallBetween
+	-- анти-десинк: кто из игроков прыгает (свой десинк / "пропадалка")
+	local trackPos, desyncUntil = {}, {}
+	bind(RunService.Heartbeat, function()
+		local now = os.clock()
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player then
+				local c = p.Character
+				local h = c and c:FindFirstChild("HumanoidRootPart")
+				if h then
+					local prev = trackPos[p]
+					local jump = prev and (h.Position - prev).Magnitude or 0
+					-- пороги с запасом: обычный бег/прыжок/падение сюда не попадают
+					if jump > 30 or h.AssemblyLinearVelocity.Magnitude > 150 then
+						desyncUntil[p] = now + 1.5
+					end
+					trackPos[p] = h.Position
+				else
+					trackPos[p] = nil
+				end
+			end
+		end
+		for p in pairs(trackPos) do
+			if not p.Parent then trackPos[p], desyncUntil[p] = nil, nil end
+		end
+	end)
+	local function isDesynced(p) return p and (desyncUntil[p] or 0) > os.clock() end
+
+	-- хитбокс мардера на момент выстрела: невидимый, 50 studs, потом возвращаем как было
+	local HITBOX = 50
+	local function bigHitbox(mhrp)
+		if not mhrp or not mhrp.Parent then return function() end end
+		local o = { size = mhrp.Size, transp = mhrp.Transparency, collide = mhrp.CanCollide }
+		pcall(function()
+			mhrp.CanCollide = false
+			mhrp.Transparency = 1
+			mhrp.Size = Vector3.one * HITBOX
+		end)
+		local done = false
+		return function()
+			if done then return end
+			done = true
+			if mhrp.Parent then
+				pcall(function()
+					mhrp.Size = o.size
+					mhrp.Transparency = o.transp
+					mhrp.CanCollide = o.collide
+				end)
+			end
+		end
+	end
 	local sa = { on = false, wallbang = true, pred = 100, part = "Torso", auto = true, quiet = true, mode = "Remote" }
 	local busy = false
+	-- WallBang: сначала без прыжка (начало выстрела у мардера); два промаха подряд через стену -
+	-- сервер такое не принимает, до конца сессии прыгаем
+	local wbMiss = 0
+	local wsForceUntil = 0 -- Shoot Murderer / Auto Shoot: навести родной выстрел даже при выключенном аимботе
+	local wsLastCall = 0 -- когда подмена WeaponService последний раз навела выстрел
 
 	-- точка рядом с мардером, откуда до него нет стены (сзади, спереди, по бокам, сверху)
 	local losParams = RaycastParams.new()
@@ -9473,11 +9530,24 @@ end)()
 		end
 	end
 
-	-- выстрел как у родного пистолета: CFrame начала, развёрнутый на цель, и CFrame цели в том же направлении
-	shotCF = function(from, aim)
-		local dir = aim - from
+	-- точка выстрела как у родного GunClient: аттачмент GunRaycastAttachment в HumanoidRootPart
+	local function gunAttach()
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		return hrp and hrp:FindFirstChild("GunRaycastAttachment")
+	end
+	local function gunFrom(fallback)
+		local a = gunAttach()
+		return a and a.WorldPosition or fallback
+	end
+
+	-- выстрел как у родного пистолета: Shoot:FireServer(GunRaycastAttachment.WorldCFrame, CFrame цели)
+	shotCF = function(from, aim, spoof)
+		local a = gunAttach()
+		local origin = (not spoof and a) and a.WorldCFrame or CFrame.lookAt(from, aim)
+		local dir = aim - origin.Position
 		if dir.Magnitude < 0.01 then dir = Vector3.new(0, 0, -1) end
-		return CFrame.lookAt(from, aim), CFrame.lookAt(aim, aim + dir.Unit)
+		return origin, CFrame.lookAt(aim, aim + dir.Unit)
 	end
 
 	-- есть ли настоящая стена между точками: невидимые / неколлизионные детали и игроков пропускаем
@@ -9501,6 +9571,30 @@ end)()
 			end
 		end
 		return true
+	end
+
+	-- WallBang без прыжка: точка у мардера со стороны стрелка, откуда до него нет стены
+	local function spoofPoint(mhrp, from0)
+		local toUs = from0 - mhrp.Position
+		toUs = toUs.Magnitude > 0.1 and toUs.Unit or Vector3.new(0, 0, 1)
+		for _, d in ipairs({ 3, 2, 5, 1.5 }) do
+			local cand = mhrp.Position + toUs * d + Vector3.new(0, 1, 0)
+			if not wallBetween(cand, mhrp.Position) then return cand end
+		end
+		for _, off in ipairs(OFFSETS) do
+			local cand = (mhrp.CFrame * CFrame.new(off)).Position
+			if not wallBetween(cand, mhrp.Position) then return cand end
+		end
+		return mhrp.Position + Vector3.new(0, 3, 0)
+	end
+
+	-- промахи через стену: после двух подряд - один раз сказать, что сервер так не пускает
+	local function wbResult(hit)
+		if hit then wbMiss = 0 return end
+		wbMiss = wbMiss + 1
+		if wbMiss == 2 then
+			notify("WallBang", "server rejects shots through walls on this game")
+		end
 	end
 
 	local function clearSpot(mhrp, myChar)
@@ -9593,7 +9687,19 @@ end)()
 		end
 		local gun = equipGun()
 		if not gun then return end
+		if sa.mode == "Module" then
+			-- стреляет сам пистолет, цель подставит подмена WeaponService
+			wsForceUntil = os.clock() + 0.5
+			pcall(function() gun:Activate() end)
+			return
+		end
+		-- пистолет только что достали - Shoot создаётся чуть позже, ждём до секунды
 		local remote, kind = gunRemote(gun)
+		local tr = os.clock()
+		while not remote and os.clock() - tr < 1 do
+			RunService.Heartbeat:Wait()
+			remote, kind = gunRemote(gun)
+		end
 		if not remote then
 			local names = describe(gun)
 			print("[peak zone] gun remotes:", #names > 0 and table.concat(names, " | ") or "none")
@@ -9613,7 +9719,11 @@ end)()
 		-- на сервере уже сейчас, а мы видим его с опозданием
 		-- упреждение: полпинга (пока выстрел летит до сервера) + настройка Prediction
 		local mchar = mhrp.Parent
+		local mplayer = Players:GetPlayerFromCharacter(mchar)
+		local desynced = isDesynced(mplayer)
 		local function aimPoint()
+			-- десинкер: скорость у него фейковая - упреждение только уводит прицел; бьём в самую свежую точку
+			if desynced then return mhrp.Position end
 			local target = mhrp
 			if sa.part == "Head" then target = mchar:FindFirstChild("Head") or mhrp
 			else target = mchar:FindFirstChild("UpperTorso") or mchar:FindFirstChild("Torso") or mhrp end
@@ -9621,15 +9731,22 @@ end)()
 			-- авто: живой пинг - полпинга до сервера + ~80мс, на которые роблокс показывает
 			-- других игроков с опозданием (интерполяция); чем выше пинг, тем больше запас
 			local livePing = getPing() / 1000
-			local lead = sa.auto and (livePing * 0.75 + 0.08) or (livePing / 2 + sa.pred / 1000)
+			local lead = (sa.pred / 1000) -- ручной: только ползунок (0 = без упреждения)
 			return target.Position + Vector3.new(v.X, v.Y * 0.5, v.Z) * lead
 		end
 
 		local spot, hold
-		-- мардера и так видно напрямую - никакого телепорта, стреляем с места
+		local spoofFrom -- начало выстрела рядом с мардером (мы сами стоим на месте)
+		-- мардера и так видно напрямую - стреляем с места
 		if tp then
-			local from0 = (gun:FindFirstChild("Handle") and gun.Handle.Position) or hrp.Position
-			if not wallBetween(from0, mhrp.Position) then tp = false end
+			local from0 = gunFrom((gun:FindFirstChild("Handle") and gun.Handle.Position) or hrp.Position)
+			if not wallBetween(from0, mhrp.Position) then
+				tp = false
+			else
+				-- стена: не прыгаем, начало выстрела - точка рядом с мардером
+				spoofFrom = spoofPoint(mhrp, from0)
+				tp = false
+			end
 		end
 		if tp then
 			cam.CameraType = Enum.CameraType.Scriptable -- картинка на экране не двигается
@@ -9648,18 +9765,21 @@ end)()
 		end
 
 		-- после прыжка стреляем на следующем кадре: сервер сначала получает новую позицию
-		local dsFaking = DS.on and not DS.gunHold -- пистолет в руке - десинк уже отдыхает
+		-- десинк (или Anti Kill All V2) только что подменял позицию - сервер ещё видит нас там
+		local dsFaking = (os.clock() - (DS.lastFakeAt or 0)) < 0.6
 		if tp and not dsFaking then RunService.Heartbeat:Wait() end
 		-- с десинком сервер видит нас в фейковой точке: ждём, пока до него дойдёт настоящая
 		-- позиция (или точка WallBang). без десинка - выстрел сразу
 		if dsFaking then
-			local w = math.clamp(ping / 2 + 2 / 60, 0.04, 0.2)
-			local t = os.clock()
-			repeat RunService.Heartbeat:Wait() until os.clock() - t >= w
+			-- ждём от последней подмены: полпинга + 3 кадра (сервер успевает получить настоящую позицию)
+			local untilT = (DS.lastFakeAt or 0) + math.clamp(ping / 2, 0.02, 0.2) + 3 / 60
+			while os.clock() < untilT do RunService.Heartbeat:Wait() end
 		end
 		local aim = aimPoint()
 		local handle = gun:FindFirstChild("Handle")
-		local from = handle and handle.Position or hrp.Position
+
+		local from = spoofFrom or (handle and handle.Position or hrp.Position)
+		local pathShot = false
 		-- попал или нет: смотрим, умер ли мардер в течение секунды
 		local mhum = mchar and mchar:FindFirstChildOfClass("Humanoid")
 		if mhum then
@@ -9667,28 +9787,32 @@ end)()
 				local t = os.clock()
 				while os.clock() - t < 1.2 do
 					if mhum.Health <= 0 or not mhum.Parent then
+						if spoofFrom then wbResult(true) end
 						notify("Silent Aimbot", "hit")
 						return
 					end
 					RunService.Heartbeat:Wait()
 				end
+				if spoofFrom then wbResult(false) end
 				notify("Silent Aimbot", sa.auto and "miss" or "miss - try changing Prediction")
 			end)
 		end
+		local unHit = bigHitbox(mhrp)
+		task.delay(0.4, unHit)
 		task.spawn(function()
 			local ok, res = pcall(function()
 				if kind == "beam" then
 					return remote:InvokeServer(1, aim, "AH2")
 				elseif remote:IsA("RemoteFunction") then
-					return remote:InvokeServer(shotCF(from, aim))
+					return remote:InvokeServer(shotCF(from, aim, spoofFrom ~= nil))
 				else
-					remote:FireServer(shotCF(from, aim))
+					remote:FireServer(shotCF(from, aim, spoofFrom ~= nil))
 					return "(event, no reply)"
 				end
 			end)
 			-- отладка в консоль F9: какой remote, куда и что ответил сервер
-			print(("[peak zone] shot via %s (%s) aim=%s tp=%s -> %s %s"):format(
-				remote:GetFullName(), kind, tostring(aim), tostring(tp), ok and "ok" or "ERROR", tostring(res)))
+			print(("[peak zone] shot via %s (%s) aim=%s spoof=%s desync=%s path=%s -> %s %s"):format(
+				remote:GetFullName(), kind, tostring(aim), tostring(spoofFrom ~= nil), tostring(desynced), tostring(pathShot), ok and "ok" or "ERROR", tostring(res)))
 		end)
 
 		if tp then
@@ -9751,6 +9875,17 @@ end)()
 		gunRef = gun
 		if gun then
 			gunConn = gun.Activated:Connect(function()
+				-- Module: пистолет стреляет сам; если подмена не сработала (модуль у экзекутора свой) -
+				-- переходим на отправку выстрела самим скриптом
+				if sa.on and gui.Parent and sa.mode == "Module" and murderer() then
+					local t = os.clock()
+					task.delay(0.3, function()
+						if sa.mode == "Module" and wsLastCall < t then
+							sa.mode = "Remote"
+							notify("Silent Aimbot", "switched to backup mode - shoot again")
+						end
+					end)
+				end
 				if sa.on and gui.Parent and sa.mode == "Remote" then
 					if murderer() then
 						task.spawn(shootMurderer, false)
@@ -9796,7 +9931,7 @@ end)()
 		end
 		-- стена между нами - родной выстрел не пробьёт: WallBang через телепорт
 		local handle = gun:FindFirstChild("Handle")
-		local from0 = handle and handle.Position or hrp.Position
+		local from0 = gunFrom(handle and handle.Position or hrp.Position)
 		if wallBetween(from0, mhrp.Position) and sa.wallbang then
 			task.spawn(shootMurderer, false)
 			return
@@ -9806,7 +9941,7 @@ end)()
 		local target = mchar:FindFirstChild("UpperTorso") or mchar:FindFirstChild("Torso") or mhrp
 		local v = mhrp.AssemblyLinearVelocity
 		local livePing = getPing() / 1000
-		local lead = sa.auto and (livePing * 0.75 + 0.08) or (livePing / 2 + sa.pred / 1000)
+		local lead = (sa.pred / 1000) -- ручной: только ползунок (0 = без упреждения)
 		local aim = target.Position + Vector3.new(v.X, v.Y * 0.5, v.Z) * lead
 		local cam = workspace.CurrentCamera
 		local locked = UIS.MouseBehavior == Enum.MouseBehavior.LockCenter
@@ -9849,6 +9984,109 @@ end)()
 		if char and char:FindFirstChild("Gun") then task.spawn(nativeShot) end
 	end)
 
+	-- Module: подменяем WeaponService:GetMouseTargetCFrame (им родной GunClient берёт цель).
+	-- хуков нет - просто меняем функцию в таблице модуля. стреляет сам пистолет игры,
+	-- из своей точки и в своём формате, только цель - мардер
+	;(function()
+		local ok, ws = pcall(function()
+			return require(game:GetService("ReplicatedStorage"):WaitForChild("ClientServices", 5):WaitForChild("WeaponService", 5))
+		end)
+		if not ok or type(ws) ~= "table" then return end
+		local oldMouse, oldTouch = ws.GetMouseTargetCFrame, ws.GetTargetPosition
+		if type(oldMouse) ~= "function" then return end
+
+		local function aimFor(mhrp)
+			local mchar = mhrp.Parent
+			if isDesynced(Players:GetPlayerFromCharacter(mchar)) then return mhrp.Position end
+			local target = mhrp
+			if sa.part == "Head" then target = mchar:FindFirstChild("Head") or mhrp
+			else target = mchar:FindFirstChild("UpperTorso") or mchar:FindFirstChild("Torso") or mhrp end
+			local v = mhrp.AssemblyLinearVelocity
+			local lead = (sa.pred / 1000)
+			return target.Position + Vector3.new(v.X, v.Y * 0.5, v.Z) * lead
+		end
+
+		local function watchHit(mchar, through)
+			local mhum = mchar and mchar:FindFirstChildOfClass("Humanoid")
+			if not mhum then return end
+			task.spawn(function()
+				local t = os.clock()
+				while os.clock() - t < 1.2 do
+					if mhum.Health <= 0 or not mhum.Parent then
+						if through then wbResult(true) end
+						notify("Silent Aimbot", "hit")
+						return
+					end
+					RunService.Heartbeat:Wait()
+				end
+				if through then wbResult(false) end
+				notify("Silent Aimbot", sa.auto and "miss" or "miss - try changing Prediction")
+			end)
+		end
+
+		-- redirect вызывает скрипт игры (GunClient) - с его правами: меню, notify и CoreGui оттуда
+		-- недоступны (ошибка = пистолет не стреляет). флаги и уведомления - только через наш Heartbeat
+		local guiOk, pending = true, {}
+		bind(RunService.Heartbeat, function()
+			guiOk = gui.Parent ~= nil
+			while #pending > 0 do
+				local job = table.remove(pending, 1)
+				watchHit(job[1], job[2])
+			end
+		end)
+
+		local function redirect(res)
+			wsLastCall = os.clock()
+			if not ((sa.on or os.clock() < wsForceUntil) and guiOk) or busy then return res end
+			local _, mhrp = murderer()
+			local char = player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not mhrp or not hrp or not hum then return res end
+			local a = gunAttach()
+			local from0 = a and a.WorldPosition or hrp.Position
+			local through = false
+			if sa.wallbang and a and wallBetween(from0, mhrp.Position) then
+				-- стена: персонаж стоит на месте, на один выстрел переносим только точку выстрела
+				-- (GunRaycastAttachment) к мардеру - пистолет читает её сразу после нас
+				through = true
+				local back = a.CFrame
+				a.WorldPosition = spoofPoint(mhrp, from0)
+				task.defer(function()
+					if a.Parent then a.CFrame = back end
+				end)
+			end
+			local aim = aimFor(mhrp)
+			table.insert(pending, { mhrp.Parent, through })
+			if typeof(res) == "Vector3" then return aim end
+			-- позиция - мардер, направление - от точки выстрела на него (не от курсора)
+			local origin = (a and a.WorldPosition) or from0
+			local dir = aim - origin
+			if dir.Magnitude < 0.01 then dir = Vector3.new(0, 0, -1) end
+			return CFrame.lookAt(aim, aim + dir.Unit)
+		end
+
+		-- любая ошибка в подмене - выстрел уходит как обычно, пистолет не ломаем
+		local function safe(res)
+			local ok, r = pcall(redirect, res)
+			if ok then return r end
+			return res
+		end
+		ws.GetMouseTargetCFrame = function(...)
+			return safe(oldMouse(...))
+		end
+		if type(oldTouch) == "function" then
+			ws.GetTargetPosition = function(...)
+				return safe(oldTouch(...))
+			end
+		end
+		sa.mode = "Module"
+		table.insert(conns, { Disconnect = function()
+			ws.GetMouseTargetCFrame = oldMouse
+			if oldTouch then ws.GetTargetPosition = oldTouch end
+		end })
+	end)()
+
 	local sec = addSection(tCombat, "Sheriff")
 	sec:Toggle("Silent Aimbot", "shoot anywhere - the bullet hits the murderer", function(on)
 		sa.on = on
@@ -9859,13 +10097,31 @@ end)()
 		end
 		notify("Silent Aimbot: " .. (on and "On" or "Off"), on and "every shot goes to the murderer" or "disabled")
 	end)
-	local wbT = sec:Toggle("WallBang", "shots go through walls (jumps to a clear spot for a frame)", function(on)
+	local wbT = sec:Toggle("WallBang", "shots go straight through walls", function(on)
 		sa.wallbang = on
+		wbMiss = 0
 	end)
 	wbT.Set(true, true)
-	local autoT = sec:Toggle("Auto prediction", "picks the lead from your live ping", function(on) sa.auto = on end)
+	local predS
+	-- Auto prediction: раз в секунду Prediction = пинг + 100мс (задержка до сервера + интерполяция),
+	-- ползунок двигается сам
+	local function autoPred()
+		local v = math.clamp(math.floor((getPing() + 100) / 10 + 0.5) * 10, 0, 700)
+		sa.pred = v
+		if predS then predS.Set(v, true) end
+	end
+	local autoT = sec:Toggle("Auto prediction", "sets Prediction from your ping every second", function(on)
+		sa.auto = on
+		if on then autoPred() end
+	end)
 	autoT.Set(true, true)
-	sec:Slider("Prediction", 0, 300, sa.pred, function(v) sa.pred = v end, function(v) return v .. "ms" end)
+	predS = sec:Slider("Prediction", 0, 700, sa.pred, function(v) sa.pred = v end, function(v) return v .. "ms" end)
+	local predAt = 0
+	bind(RunService.Heartbeat, function()
+		if not sa.auto or os.clock() - predAt < 1 then return end
+		predAt = os.clock()
+		autoPred()
+	end)
 
 	-- Auto Shoot Murderer: пистолет у тебя, ты в раунде - сам стреляет в мардера (повтор раз в 2 сек)
 	local autoShoot = false
@@ -9900,16 +10156,29 @@ end)()
 end)()
 
 ---------------------------------------------------------------- вкладка Combat: Defense (Anti Kill All)
--- мардер начал прыгать телепортами (чужой Kill All) - уносим себя вверх и каждый кадр
--- меняем точку: его скрипт целится в старую позицию и бьёт в пустоту
+-- мардер достал нож (или прыгает телепортами) - включаем десинк заранее: сервер видит нас
+-- в случайной точке, которая меняется каждые 30 мс, чужой Kill All бьёт в пустоту.
+-- у себя на экране всё как обычно, играешь сам
 ;(function()
 	local on = false
-	local lastPos = {} -- мардер -> позиция в прошлом кадре
+	local lastPos = {}
 	local dangerUntil = 0
+	local TP_DIST = 25
+	local warned = false
+	local mode = "V2" -- V1: уносим персонажа в воздух; V2: десинк (играешь как обычно)
 	local home, camType
-	local TP_DIST = 25   -- столько за кадр живой игрок не пробежит
-	local HOLD = 1.5     -- сколько держимся в воздухе после последнего телепорта
-	local NEAR_DIST = 12 -- мардер с ножом ближе - уходим
+
+	local function restore(hrp, hum)
+		if hrp and hrp.Parent and home then
+			hrp.CFrame = home
+			hrp.AssemblyLinearVelocity = Vector3.zero
+		end
+		if home then dsEnd() end
+		home = nil
+		local cam = workspace.CurrentCamera
+		cam.CameraType = camType or Enum.CameraType.Custom
+		if hum then cam.CameraSubject = hum end
+	end
 
 	local function hasTool(p, name)
 		local char, bp = p.Character, p:FindFirstChildOfClass("Backpack")
@@ -9926,53 +10195,43 @@ end)()
 		return math.abs(rel.X) <= half.X and math.abs(rel.Y) <= half.Y and math.abs(rel.Z) <= half.Z
 	end
 
-	local function restore(hrp, hum)
-		if hrp and hrp.Parent and home then
-			hrp.CFrame = home
-			hrp.AssemblyLinearVelocity = Vector3.zero
-		end
-		if home then dsEnd() end
-		home = nil
-		local cam = workspace.CurrentCamera
-		cam.CameraType = camType or Enum.CameraType.Custom
-		if hum then cam.CameraSubject = hum end
-	end
-
 	bind(RunService.Heartbeat, function()
 		if not on then
-			if next(lastPos) then table.clear(lastPos) end
+			if DS.force then DS.force = false end
+			DS.v2 = false
+			if home then
+				local c = player.Character
+				restore(c and c:FindFirstChild("HumanoidRootPart"), c and c:FindFirstChildOfClass("Humanoid"))
+			end
 			return
 		end
 		local char = player.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		local now = os.clock()
-
-		-- мы сами мардер или мертвы - защита не нужна
-		if not hrp or not hum or hum.Health <= 0 or hasTool(player, "Knife") then
+		-- мы мардер / мертвы / в лобби / целимся из пистолета - защита не нужна
+		if not hrp or not hum or hum.Health <= 0 or hasTool(player, "Knife") or inLobby(hrp.Position)
+			or char:FindFirstChild("Gun") then
+			DS.force = false
+			DS.v2 = false
+			warned = false
 			if home then restore(hrp, hum) end
 			return
 		end
-
-		-- ищем телепорты мардера
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p ~= player then
 				local c = p.Character
 				local mh = c and c:FindFirstChild("HumanoidRootPart")
 				if mh and hasTool(p, "Knife") then
-					local prev = lastPos[p]
 					local pos = mh.Position
-					if prev and (pos - prev).Magnitude > TP_DIST and not inLobby(prev) and not inLobby(pos) then
-						if now > dangerUntil then notify("Anti Kill All", "murderer is teleporting - dodging") end
-						dangerUntil = now + HOLD
-					end
-					-- мардер с ножом в руке рядом с нами (подошёл / прыгнул прямо к нам) - тоже уходим
-					local myPos = (home and home.Position) or hrp.Position
-					-- пистолет в руке (стреляешь в мардера) - близость не считаем, иначе уносит посреди выстрела
-					local aiming = char:FindFirstChild("Gun") ~= nil
-					if not aiming and c:FindFirstChild("Knife") and (pos - myPos).Magnitude < NEAR_DIST and not inLobby(pos) then
-						if now > dangerUntil then notify("Anti Kill All", "murderer is close - dodging") end
+					-- нож в руке И рядом с нами (ближе 20) - реальная угроза; нож где-то далеко - не считаем
+					if c:FindFirstChild("Knife") and (pos - hrp.Position).Magnitude < 20 then
 						dangerUntil = math.max(dangerUntil, now + 0.8)
+					end
+					-- телепорт мардера
+					local prev = lastPos[p]
+					if prev and (pos - prev).Magnitude > TP_DIST and not inLobby(prev) and not inLobby(pos) then
+						dangerUntil = now + 2
 					end
 					lastPos[p] = pos
 				else
@@ -9980,19 +10239,40 @@ end)()
 				end
 			end
 		end
-
-		if now < dangerUntil then
+		local danger = now < dangerUntil
+		if mode == "V1" and danger and not warned then
+			warned = true
+			notify("Anti Kill All", "murderer is coming - you're untouchable")
+		elseif not danger then
+			warned = false
+		end
+		if mode == "V2" then
+			-- V2: защита всё время раунда (не ждём угрозы); десинк ставит нас каждый кадр
+			-- в новую точку подальше от мардера
+			local mp
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p ~= player and hasTool(p, "Knife") and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+					mp = p.Character.HumanoidRootPart.Position
+				end
+			end
+			DS.murdererPos = mp
+			DS.force = true
+			DS.v2 = true
+			return
+		end
+		DS.v2 = false
+		-- V1: уносим персонажа высоко вверх, каждый кадр новая точка; камера стоит на месте
+		DS.force = false
+		if danger then
 			if not home then
 				dsBegin(hrp)
 				home = hrp.CFrame
 				local cam = workspace.CurrentCamera
 				camType = cam.CameraType
-				cam.CameraType = Enum.CameraType.Scriptable -- экран не дёргается
+				cam.CameraType = Enum.CameraType.Scriptable
 			end
-			-- каждый кадр новая точка высоко над местом
 			local r = 30
-			local off = Vector3.new(math.random(-r, r), math.random(60, 90), math.random(-r, r))
-			hrp.CFrame = CFrame.new(home.Position + off)
+			hrp.CFrame = CFrame.new(home.Position + Vector3.new(math.random(-r, r), math.random(60, 90), math.random(-r, r)))
 			hrp.AssemblyLinearVelocity = Vector3.zero
 		elseif home then
 			restore(hrp, hum)
@@ -10002,11 +10282,16 @@ end)()
 	local sec = addSection(tCombat, "Defense")
 	sec:Toggle("Anti Kill All", "peak zone protection", function(v)
 		on = v
-		if not v and home then
-			local char = player.Character
-			restore(char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid"))
-		end
+		if not v then DS.force = false end
 		notify("Anti Kill All: " .. (v and "On" or "Off"), v and "watching the murderer" or "disabled")
+	end)
+	sec:Segmented("Mode", { "V1", "V2" }, mode, function(v)
+		mode = v
+		DS.force = false
+		if v ~= "V1" and home then
+			local c = player.Character
+			restore(c and c:FindFirstChild("HumanoidRootPart"), c and c:FindFirstChildOfClass("Humanoid"))
+		end
 	end)
 end)()
 
@@ -10141,7 +10426,7 @@ end)()
 	end
 
 	bind(RunService.Heartbeat, function()
-		if not ds.on or DS.pause > 0 then return end
+		if not (ds.on or DS.force) or DS.pause > 0 then return end
 		local char = player.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -10155,7 +10440,19 @@ end)()
 		local now = os.clock()
 		local pos = hrp.Position
 
-		if ds.mode == "Random" then
+		if DS.force and DS.v2 then
+			-- Anti Kill All V2: каждый кадр новая точка в объёме (радиус 100, высота ±40),
+			-- из нескольких выбираем самую дальнюю от мардера, ближе 40 к нему - не берём
+			local best, bestD
+			for _ = 1, 6 do
+				local dir = Vector3.new(math.random() * 2 - 1, (math.random() * 2 - 1) * 0.4, math.random() * 2 - 1)
+				if dir.Magnitude < 0.05 then dir = Vector3.xAxis end
+				local cand = pos + dir.Unit * (40 + math.random() * 60)
+				local d = DS.murdererPos and (cand - DS.murdererPos).Magnitude or 999
+				if d >= 40 and (not bestD or d > bestD) then best, bestD = cand, d end
+			end
+			fake = best or (pos + Vector3.new(0, 80, 0))
+		elseif ds.mode == "Random" then
 			if not fake or now >= nextJump then
 				fake = pickSpot(pos, char)
 				nextJump = now + ds.interval / 1000
@@ -10169,7 +10466,10 @@ end)()
 
 		local real = hrp.CFrame
 		DS.real = real
-		DS.fakeCF = CFrame.new(fake) * (real - real.Position)
+		DS.lastFakeAt = os.clock()
+		-- у других модель ещё и бешено крутится во все стороны (каждый кадр новый поворот)
+		local sp = now * 40
+		DS.fakeCF = CFrame.new(fake) * CFrame.Angles(sp * 1.3 + math.random() * 6.28, sp + math.random() * 6.28, sp * 0.7 + math.random() * 6.28)
 		hrp.CFrame = DS.fakeCF
 		-- стоим на месте - роблокс "усыпляет" персонажа и не шлёт позицию на сервер.
 		-- 1) запрещаем сон напрямую (если экзекутор умеет), 2) скорость на момент отправки
@@ -10256,7 +10556,7 @@ end)()
 	RunService:BindToRenderStep(VIS_NAME, Enum.RenderPriority.First.Value + 1, function()
 		local char = player.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if not ds.on or not ds.tracer or DS.pause > 0 or DS.gunHold or not hrp or not DS.fakeCF then
+		if not (ds.on or DS.force) or not ds.tracer or DS.pause > 0 or DS.gunHold or not hrp or not DS.fakeCF then
 			if vis.folder then clearVis() end
 			return
 		end
