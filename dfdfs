@@ -1,4 +1,4 @@
--- peak zone1 | v2.0
+-- peak zone | v23.0
 -- RightShift - открыть/закрыть (клавишу можно поменять в Settings)
 -- или клик по вотермарку сверху слева (его можно таскать)
 
@@ -1060,7 +1060,10 @@ pcall(function()
 end)
 
 local cfgDirty, cfgAt = false, 0
+-- эти функции в конфиг не пишутся и при запуске не включаются сами (даже если были включены)
+local CFG_SKIP = { ["Troll Fun/Hug/Hug"] = true }
 local function cfgSet(key, v)
+	if CFG_SKIP[key] then return end
 	-- пока строим меню и возвращаем сохранённое - ничего не перезаписываем
 	if cfgLoading or cfgData[key] == v then return end
 	cfgData[key] = v
@@ -1083,6 +1086,7 @@ local function cfgKey(sec, name)
 	return sec.tab.label.Text .. "/" .. sec.name .. "/" .. name
 end
 local function cfgReg(key, set)
+	if CFG_SKIP[key] then return end
 	table.insert(cfgRegistry, { key = key, set = set })
 end
 
@@ -2482,6 +2486,7 @@ end
 
 local hudGrads = {} -- переливаются всегда, даже когда меню закрыто
 
+
 -- вотермарк (он же кнопка: клик - открыть/закрыть меню, можно таскать)
 -- контейнер: в нём вотермарк и подсказка, двигаются вместе
 local wmHolder = new("Frame", {
@@ -3154,7 +3159,7 @@ end)()
 local tMove = addTab("Main", "gear", "speed, jumps and character")
 local tCombat = addTab("Combat", "target", "combat features")
 addDivider()
-local tSkins = addTab("Skin Changer", "star", "skins collected from other players, only you see them")
+local tSkins = addTab("Skin Changer", "star", "every MM2 knife and gun, only you see them")
 local tVote = addTab("Vote Dupe Map", "pin", "vote for a map over and over (tp + reset loop)")
 addDivider()
 local tTroll = addTab("Troll Fun", "smile", "fun and trolling")
@@ -3163,6 +3168,8 @@ local resetFreeAnims
 addDivider()
 local tVisual = addTab("Visuals", "eye", "realistic shader, light and sky")
 addSubTabs(tVisual, { "Shader", "ESP", "BackTrack", "Models" })
+local tCursors = addTab("Cursors", "bolt", "your own cursor")
+local cursorsOff -- возвращает обычный курсор
 local espOff -- выключает ESP (задаётся во вкладке Visuals > ESP)
 local spinOff -- выключает Spin (вкладка Troll Fun)
 local btOff -- выключает BackTrack (вкладка Visuals > BackTrack)
@@ -3172,6 +3179,7 @@ local voteOff -- останавливает цикл голосования (в�
 local modelsOff -- снимает Custom Models (Visuals > Models)
 local avatarOff -- снимает Headless / Korblox
 local orbsOff -- убирает Orbs
+local skyWormsOff -- убирает Sky Worms
 local gunSkinOff -- снимает AWM
 -- десинк: DS.real - настоящая позиция, пока персонаж стоит в фейковой точке;
 -- функции с телепортом (граб, kill all, аимбот...) ставят десинк на паузу и берут настоящий "дом"
@@ -7079,6 +7087,377 @@ end)()
 	end
 end)()
 
+---------------------------------------------------------------- вкладка Visuals > Models: Sky Worms (белые импульсы по карте)
+-- мелкие белые "червячки" носятся по всей карте вокруг тебя как сигналы по схеме: прямые отрезки,
+-- резкие повороты под 90°, тонкий светящийся след. только у тебя на экране
+;(function()
+	local sw = { on = false, count = 30, speed = 100 }
+	local AREA, TOP = 120, 40 -- студов вокруг тебя по горизонтали / высота над полом
+	local DIRS = {
+		Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1),
+		Vector3.new(0, 0, -1), Vector3.new(0, 1, 0), Vector3.new(0, -1, 0),
+	}
+	local WHITE = Color3.new(1, 1, 1)
+	local TAIL = Color3.fromRGB(170, 215, 255)
+	local folder
+	local worms = {}
+	local rnd = Random.new()
+
+	local function clear()
+		if folder then folder:Destroy() end
+		folder = nil
+		table.clear(worms)
+	end
+
+	local function newWorm()
+		local head = Instance.new("Part")
+		head.Shape = Enum.PartType.Ball
+		head.Size = Vector3.one * 0.22
+		head.Material = Enum.Material.Neon
+		head.Color = WHITE
+		head.Anchored, head.CanCollide, head.CanQuery, head.CanTouch, head.CastShadow = true, false, false, false, false
+		head.Parent = folder
+		local a0 = new("Attachment", { Position = Vector3.new(0, 0.06, 0), Parent = head })
+		local a1 = new("Attachment", { Position = Vector3.new(0, -0.06, 0), Parent = head })
+		new("Trail", {
+			Attachment0 = a0, Attachment1 = a1, Lifetime = rnd:NextNumber(0.35, 0.7),
+			LightEmission = 1, LightInfluence = 0, FaceCamera = true, MinLength = 0.05,
+			Color = ColorSequence.new(WHITE, TAIL),
+			Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+			WidthScale = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.2) }),
+			Parent = head,
+		})
+		return { head = head, pos = nil, dir = DIRS[1], left = 0, spd = rnd:NextNumber(22, 42) }
+	end
+
+	local function build()
+		clear()
+		folder = new("Folder", { Name = "PZSkyWorms", Parent = workspace.CurrentCamera })
+		for i = 1, sw.count do worms[i] = newWorm() end
+	end
+
+	-- новый отрезок: поворот под 90° (по горизонтали чаще), у края зоны - назад к центру
+	local function turn(w, center, floor)
+		local off = w.pos - center
+		local opts = {}
+		for _, d in ipairs(DIRS) do
+			if d:Dot(w.dir) == 0 then
+				local ok = true
+				if d.X ~= 0 and math.abs(off.X) > AREA * 0.8 and d.X * off.X > 0 then ok = false end
+				if d.Z ~= 0 and math.abs(off.Z) > AREA * 0.8 and d.Z * off.Z > 0 then ok = false end
+				if d.Y > 0 and w.pos.Y > floor + TOP then ok = false end
+				if d.Y < 0 and w.pos.Y < floor + 2 then ok = false end
+				if ok then
+					table.insert(opts, d)
+					if d.Y == 0 then table.insert(opts, d) end -- горизонталь в 2 раза чаще
+				end
+			end
+		end
+		w.dir = #opts > 0 and opts[rnd:NextInteger(1, #opts)] or -w.dir
+		w.left = rnd:NextNumber(4, 22)
+	end
+
+	local function spawnAt(w, center, floor)
+		w.pos = center + Vector3.new(rnd:NextNumber(-AREA, AREA), 0, rnd:NextNumber(-AREA, AREA))
+		w.pos = Vector3.new(w.pos.X, floor + rnd:NextNumber(2, TOP), w.pos.Z)
+		w.dir = DIRS[rnd:NextInteger(1, 4)]
+		w.left = rnd:NextNumber(4, 22)
+		-- телепорт головы без следа через всю карту
+		for _, d in ipairs(w.head:GetChildren()) do
+			if d:IsA("Trail") then d:Clear() end
+		end
+	end
+
+	bind(RunService.RenderStepped, function(dt)
+		if not sw.on then return end
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		if not folder or not folder.Parent or #worms ~= sw.count then build() end
+		local center = hrp.Position
+		local floor = center.Y - 3
+		dt = math.min(dt, 0.1)
+		for _, w in ipairs(worms) do
+			if not w.pos or (w.pos - center).Magnitude > AREA * 1.8 then
+				spawnAt(w, center, floor)
+			end
+			local step = w.spd * sw.speed / 100 * dt
+			while step > 0 do
+				local s = math.min(step, w.left)
+				w.pos += w.dir * s
+				w.left -= s
+				step -= s
+				if w.left <= 0 then turn(w, center, floor) end
+			end
+			w.head.CFrame = CFrame.new(w.pos)
+		end
+	end)
+
+	local sec = addSection(tVisual, "Sky Worms", "Models")
+	sec:Toggle("Sky Worms", "peak zone exclusive - white signals run across the map (only you see them)", function(on)
+		sw.on = on
+		if not on then clear() end
+		notify("Sky Worms: " .. (on and "On" or "Off"), on and "the map is online" or "signal lost")
+	end)
+	sec:Slider("Count", 10, 60, sw.count, function(v) sw.count = v end)
+	sec:Slider("Speed", 20, 300, sw.speed, function(v) sw.speed = v end, function(v) return v .. "%" end)
+
+	skyWormsOff = function()
+		sw.on = false
+		clear()
+	end
+end)()
+
+---------------------------------------------------------------- вкладка Cursors (свой курсор, когда держишь пистолет)
+-- карточки с картинками как во Free anims; выбранный курсор рисуется поверх экрана вместо
+-- обычного (системный прячется). режим Gun - только с пистолетом в руке, Always - всегда
+;(function()
+	-- id декалей из каталога роблокса; картинка берётся через rbxthumb (прозрачный фон)
+	local CURSORS = {
+		{ 11726322365, "Pink Heart" }, { 11754490336, "Heart Scope" }, { 12094859168, "White Heart" },
+		{ 12094860445, "Mint Heart" }, { 11747999974, "Red Heart" }, { 12909937176, "Angel Heart" },
+		{ 11767039760, "Heart Line" }, { 84069910734738, "Heart Sight" }, { 14128309111, "Heart Cross" },
+		{ 11739569706, "Pixel Heart" }, { 12323570810, "Glow Heart" }, { 12146777431, "Soft Heart" },
+		{ 11254520798, "Neon Pink" }, { 81102279303918, "Neon Rose" }, { 11716577756, "Pink Medic" },
+		{ 12439641494, "Pink Scope" }, { 91638190237682, "Neon Green" }, { 1458996342, "Ice X" },
+		{ 942455758, "Cyan Tri" }, { 5159914167, "Classic" }, { 29066471, "Red Dot" },
+		{ 10891594364, "Glow Orb" }, { 13613212658, "Rainbow Star" }, { 13944218938, "Pink Star" },
+		{ 13944215054, "White Star" }, { 130225909042821, "Purple Star" }, { 84232095638395, "Star Line" },
+		{ 11893991373, "Kuromi" }, { 12030244945, "Hello Kitty" }, { 11768101227, "Gengar" },
+		{ 130973865039213, "Kitty Pointer" }, { 108267553252298, "Pink Pointer" }, { 12818611757, "Blue Pointer" },
+	}
+	local SIZES = { S = 28, M = 40, L = 56 }
+	local cur = { on = false, id = nil, mode = "Always", size = "M" }
+
+	local function img(id) return ("rbxthumb://type=Asset&id=%d&w=150&h=150"):format(id) end
+
+	-- сам курсор: отдельный ScreenGui без отступа сверху, поверх всего
+	local cg = new("ScreenGui", { Name = "PZCursor", ResetOnSpawn = false, IgnoreGuiInset = true, DisplayOrder = 2000 })
+	pcall(function() cg.Parent = gui.Parent end)
+	local icon = new("ImageLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(SIZES.M, SIZES.M),
+		ScaleType = Enum.ScaleType.Fit,
+		Visible = false,
+		ZIndex = 10,
+		Parent = cg,
+	})
+	local pop = new("UIScale", { Parent = icon })
+	local hidden = false -- мы прятали системный курсор
+
+	-- самым последним перед отрисовкой: игра/роблокс возвращают системный курсор посреди кадра,
+	-- и он успевал мелькнуть рядом с нашим. прячем каждый кадр прямо перед рендером
+	local function cursorStep()
+		local char = player.Character
+		local active = cur.on and cur.id ~= nil
+			and (cur.mode == "Always" or (char and char:FindFirstChild("Gun") ~= nil))
+		if active then
+			UIS.MouseIconEnabled = false
+			hidden = true
+			local m = UIS:GetMouseLocation()
+			icon.Position = UDim2.fromOffset(m.X, m.Y)
+			icon.Visible = true
+		elseif hidden then
+			hidden = false
+			UIS.MouseIconEnabled = true
+			icon.Visible = false
+		end
+	end
+	local CUR_STEP = "PeakZoneCursor"
+	pcall(function() RunService:UnbindFromRenderStep(CUR_STEP) end)
+	RunService:BindToRenderStep(CUR_STEP, Enum.RenderPriority.Last.Value + 10, cursorStep)
+	-- и сразу, как только кто-то включил системный курсор обратно
+	bind(UIS:GetPropertyChangedSignal("MouseIconEnabled"), function()
+		if hidden and UIS.MouseIconEnabled then UIS.MouseIconEnabled = false end
+	end)
+	-- клик - курсор "пружинит"
+	bind(UIS.InputBegan, function(input)
+		if icon.Visible and input.UserInputType == Enum.UserInputType.MouseButton1 then
+			pop.Scale = 0.75
+			tween(pop, 0.25, { Scale = 1 }, Enum.EasingDirection.Out, Enum.EasingStyle.Back)
+		end
+	end)
+
+	---------------- страница
+	local page = tCursors.page
+	tCursors.custom = true
+	tCursors.title.Visible = false
+	tCursors.desc.Visible = false
+	page.ScrollingEnabled = false
+	page.ScrollBarThickness = 0
+	page.CanvasSize = UDim2.new()
+
+	local THUMB = Color3.fromRGB(36, 36, 38)
+	local THUMB_HOVER = Color3.fromRGB(48, 48, 52)
+	local NAMEBG = Color3.fromRGB(17, 17, 19)
+	local TOP_H = 30
+	local GRID_Y = TOP_H + 12
+
+	local bar = new("Frame", { Size = UDim2.new(1, 0, 0, TOP_H), BackgroundTransparency = 1, ZIndex = 3, Parent = page })
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = bar,
+	})
+
+	-- кнопка-пилюля: подсвечена, если включена
+	local function pill(text, order, cb)
+		local w = TextService:GetTextSize(text, 13, Enum.Font.GothamMedium, Vector2.new(300, 40)).X + 26
+		local b = new("TextButton", {
+			Text = text,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 13,
+			TextColor3 = SUB,
+			AutoButtonColor = false,
+			BackgroundColor3 = Color3.fromRGB(90, 90, 90),
+			BackgroundTransparency = 0.85,
+			Size = UDim2.fromOffset(w, TOP_H),
+			LayoutOrder = order,
+			ZIndex = 4,
+			Parent = bar,
+		})
+		round(b, 9)
+		bind(b.MouseButton1Click, cb)
+		return function(on)
+			tween(b, 0.2, { BackgroundTransparency = on and 0.35 or 0.85, TextColor3 = on and WHITE or SUB })
+		end
+	end
+
+	local paintAll
+	local onPill = pill("Cursor: Off", 1, function()
+		cur.on = not cur.on
+		cfgSet("cursors.on", cur.on)
+		paintAll()
+		notify("Cursor: " .. (cur.on and "On" or "Off"), cur.on and (cur.id and (cur.mode == "Gun" and "take the gun" or "enjoy") or "pick a cursor below") or "default cursor")
+	end)
+	local modeP, sizeP = {}, {}
+	for i, m in ipairs({ "Always", "Gun" }) do
+		modeP[m] = pill(m, 1 + i, function()
+			cur.mode = m
+			cfgSet("cursors.mode", m)
+			paintAll()
+		end)
+	end
+	for i, s in ipairs({ "S", "M", "L" }) do
+		sizeP[s] = pill(s, 10 + i, function()
+			cur.size = s
+			cfgSet("cursors.size", s)
+			paintAll()
+		end)
+	end
+	-- текст на кнопке включения
+	local onBtn
+	for _, c in ipairs(bar:GetChildren()) do
+		if c:IsA("TextButton") and c.LayoutOrder == 1 then onBtn = c end
+	end
+
+	local grid = new("ScrollingFrame", {
+		Position = UDim2.fromOffset(0, GRID_Y),
+		Size = UDim2.new(1, 0, 1, -GRID_Y),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = SUB,
+		ScrollBarImageTransparency = 0.3,
+		VerticalScrollBarInset = Enum.ScrollBarInset.Always,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		CanvasSize = UDim2.new(),
+		ZIndex = 2,
+		Parent = page,
+	})
+	new("UIPadding", { PaddingTop = UDim.new(0, 1), PaddingLeft = UDim.new(0, 1), PaddingRight = UDim.new(0, 4), Parent = grid })
+	local layout = new("UIGridLayout", {
+		CellSize = UDim2.new(1 / 4, -6, 0, 118),
+		CellPadding = UDim2.fromOffset(8, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Parent = grid,
+	})
+	bind(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+		grid.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 8)
+	end)
+
+	local strokes = {}
+	for i, c in ipairs(CURSORS) do
+		local id, name = c[1], c[2]
+		local card = new("TextButton", { Text = "", AutoButtonColor = false, BackgroundTransparency = 1, LayoutOrder = i, ZIndex = 2, Parent = grid })
+		local thumb = new("Frame", { Size = UDim2.new(1, 0, 0, 88), BackgroundColor3 = THUMB, ZIndex = 2, Parent = card })
+		round(thumb, 8)
+		strokes[id] = outline(thumb)
+		local pic = new("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(62, 62),
+			BackgroundTransparency = 1,
+			ScaleType = Enum.ScaleType.Fit,
+			Image = img(id),
+			ZIndex = 3,
+			Parent = thumb,
+		})
+		local nameBg = new("Frame", { Position = UDim2.fromOffset(0, 93), Size = UDim2.new(1, 0, 1, -93), BackgroundColor3 = NAMEBG, ZIndex = 2, Parent = card })
+		round(nameBg, 8)
+		new("TextLabel", {
+			Text = name:upper(),
+			Font = Enum.Font.GothamBold,
+			TextSize = 10,
+			TextColor3 = WHITE,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(4, 0),
+			Size = UDim2.new(1, -8, 1, 0),
+			ZIndex = 3,
+			Parent = nameBg,
+		})
+		bind(card.MouseEnter, function()
+			tween(thumb, 0.15, { BackgroundColor3 = THUMB_HOVER })
+			tween(pic, 0.2, { Size = UDim2.fromOffset(72, 72) }, Enum.EasingDirection.Out, Enum.EasingStyle.Back)
+		end)
+		bind(card.MouseLeave, function()
+			tween(thumb, 0.15, { BackgroundColor3 = THUMB })
+			tween(pic, 0.2, { Size = UDim2.fromOffset(62, 62) })
+		end)
+		bind(card.MouseButton1Click, function()
+			cur.id = id
+			cur.on = true
+			cfgSet("cursors.id", id)
+			cfgSet("cursors.on", true)
+			paintAll()
+			notify("Cursor", name .. (cur.mode == "Gun" and " - take the gun" or ""))
+		end)
+	end
+
+	paintAll = function()
+		onPill(cur.on)
+		if onBtn then onBtn.Text = "Cursor: " .. (cur.on and "On" or "Off") end
+		for m, f in pairs(modeP) do f(cur.mode == m) end
+		for s, f in pairs(sizeP) do f(cur.size == s) end
+		for id, st in pairs(strokes) do
+			local on = cur.id == id
+			st.Color = on and WHITE or LINE
+			st.Transparency = on and 0.1 or 0
+		end
+		if cur.id then icon.Image = img(cur.id) end
+		icon.Size = UDim2.fromOffset(SIZES[cur.size] or 40, SIZES[cur.size] or 40)
+	end
+	paintAll()
+
+	-- автоконфиг
+	cfgReg("cursors.on", function(v) if type(v) == "boolean" then cur.on = v paintAll() end end)
+	cfgReg("cursors.id", function(v) if type(v) == "number" then cur.id = v paintAll() end end)
+	cfgReg("cursors.mode", function(v) if v == "Gun" or v == "Always" then cur.mode = v paintAll() end end)
+	cfgReg("cursors.size", function(v) if SIZES[v] then cur.size = v paintAll() end end)
+
+	cursorsOff = function()
+		pcall(function() RunService:UnbindFromRenderStep(CUR_STEP) end)
+		cur.on = false
+		if hidden then UIS.MouseIconEnabled = true end
+		hidden = false
+		cg:Destroy()
+	end
+end)()
+
 ---------------------------------------------------------------- вкладка Visuals > Models: Gun Skin (AWM на пистолет шерифа)
 -- модель AWM из каталога крепится вместо пистолета, родной пистолет прячется; только у тебя на экране
 ;(function()
@@ -7243,9 +7622,8 @@ end)()
 end)()
 
 ---------------------------------------------------------------- вкладка Skin Changer: коллекция скинов (видно только тебе)
--- модели скинов MM2 закрыты (copylocked) - с сайта не скачать. Поэтому собираем меши с оружия
--- других игроков: стенды в лобби (Workspace.WeaponDisplays) и ножи/пистолеты в руках в раунде.
--- Коллекция сохраняется в файл и растёт от сервера к серверу.
+-- весь каталог ножей и пистолетов MM2 вшит в скрипт (меш + текстура + масштаб из базы предметов игры):
+-- выбрал - и играешь, ничего собирать не нужно
 -- Оружие MM2: Tool > Handle [Part] > SpecialMesh (MeshId + TextureId) - их и подменяем.
 ;(function()
 	local HttpService = game:GetService("HttpService")
@@ -7254,7 +7632,7 @@ end)()
 	local sk = {
 		sel = { Knife = nil, Gun = nil }, -- ключ скина из коллекции
 		listType = "Knife",
-		size = 100,        -- размер скина, %
+		size = 100,        -- размер как в MM2 (настройки размера нет)
 		glow = false,
 		sparkles = false,
 		trail = false,
@@ -7264,18 +7642,922 @@ end)()
 
 	---------------- коллекция
 
-	local collection = {} -- список { key, type, mesh, tex, scale = {x,y,z}, from, t }
+	-- каталог MM2 (ServerStorage.Database.Item + Database.Sync.Item): ключ, название, тип, редкость,
+	-- меш, текстура, масштаб x/y/z, картинка. дубликаты (тот же меш+текстура) убраны
+	local CATALOG = {
+		{ "GhostK2018", "Ghost 2018", "K", "Legendary", 121944778, 2514800940, 1, 1, 1, 2513732969, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Biogun", "Biogun", "G", "Uncommon", 79401392, 4659589763, 1.5, 1.5, 1.5, 4659627458, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Skulls_K_2021", "Skulls 2021", "K", "Uncommon", 121944778, 7756610618, 1, 1, 1, 7800220325, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "AmericaGun", "America", "G", "Classic", 25298496, 164669251, 1.5, 1.5, 1.5, 164676043, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Frozen_K_2022", "Frozen 2022", "K", "Common", 121944778, 4528568803, 1, 1, 1, 11834404402, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe", "Gingerscythe (Rare)", "K", "Rare", 15397894467, 15397714781, 0.9733, 0.9733, 0.9733, 15683138101, 0, -0.9894, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Legendary", "Gingerscythe (Legendary)", "K", "Legendary", 15397894467, 15397484015, 0.9733, 0.9733, 0.9733, 15683140564, 0, -0.9894, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Jack", "Jack", "K", "Rare", 121944778, 315094945, 1.0005, 1, 1, 315099010, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Space", "Space", "K", "Rare", 957726558, 3183404232, 1, 1, 1, 3183607442, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Splash", "Splash", "K", "Legendary", 121944778, 235343795, 1, 1, 1, 235371439, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gifts_K_2019", "Gifts 2019", "K", "Common", 957726558, 4534828383, 1, 1, 1, 4534856285, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bones_K_2024", "Bones 2024", "K", "Uncommon", 6600901997, 89105172362040, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RandLuger", "Glitch2", "K", "Common", 121944778, 191784815, 1, 1, 1, 196751515, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Kool", "Yellow", "K", "Common", 121944778, 473621021, 1, 1, 1, 473625906, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "WebbedK", "Webbed", "K", "Common", 957726558, 4210410097, 1, 1, 1, 4210949599, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Witch_K_2022", "Witchbrew", "K", "Uncommon", 957726558, 11245959206, 1, 1, 1, 11254115609, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "PredatorKnife", "Predator", "K", "Legendary", 121944778, 199611278, 1, 1, 1, 235372015, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eyeball_K_2022", "Eyeball", "K", "Common", 121944778, 11217645677, 1, 1, 1, 11254065007, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Heart_K_2023", "Heart", "K", "Rare", 10855586895, 12248435132, 1, 1, 1, 12339327069, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Butterflies_G_2025", "Butterflies", "G", "Rare", 79401392, 124763121225655, 1.6, 1.6, 1.6, 135662872427976, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Tulip", "Tulip", "K", "Common", 121944778, 387468258, 1, 1, 1, 387874661, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sharky_K_2024", "Sharky", "K", "Rare", 6600901997, 18321899067, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ScratchBlue", "Scratch · ScratchBlue", "K", "Legendary", 121944778, 1311186323, 1, 1, 1, 1133316381, 0, -0.9885, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "MLG", "Shiny", "K", "Legendary", 121944778, 473623765, 1, 1, 1, 473626979, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Slate", "Slate", "K", "Common", 121944778, 161577504, 1, 1, 1, 198453556, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cherry", "Cherry", "K", "Common", 121944778, 155195316, 1, 1, 1, 6711852603, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Love", "Love", "K", "Common", 121944778, 192527236, 1, 1, 1, 196750845, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snoop", "Red", "K", "Uncommon", 121944778, 473621136, 1, 1, 1, 473626150, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Linked", "Linked", "K", "Common", 121944778, 172762850, 1, 1, 1, 198453528, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Elite", "Elite", "K", "Legendary", 121944778, 241077941, 1, 1, 1, 241095344, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ZombieK2018", "Zombie 2018", "K", "Uncommon", 121944778, 103728247210594, 1, 1, 1, 2513734908, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eyes_K_2020", "Watcher 2020", "K", "Common", 957726558, 5866358413, 1, 1, 1, 5866438542, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Aurora_K_2019", "Aurora 2019", "K", "Rare", 957726558, 4534823003, 1, 1, 1, 4534860689, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerbread_K_2022", "Gingerbread 2022", "K", "Rare", 121944778, 11802560347, 1, 1, 1, 11834399071, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SlimyK", "Slimy", "K", "Common", 957726558, 4210874138, 1, 1, 1, 4210932676, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Witched", "Witched", "K", "Legendary", 957726558, 4210410129, 1, 1, 1, 4210938270, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "MoltenKnife", "Molten", "K", "Rare", 121944778, 472483450, 1, 1, 1, 235371809, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "StickersX_K_2022", "Stickers 2022 · StickersX_K_2022", "K", "Common", 957726558, 11823434191, 1, 1, 1, 11834387858, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Moons", "Moons", "K", "Uncommon", 121944778, 531835087, 1, 1, 1, 531873154, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VampireK2018", "Vampire 2018", "K", "Rare", 121944778, 2513708625, 1, 1, 1, 2513734708, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "JD", "JD", "K", "Legendary", 121944778, 559676009, 1, 1, 1, 566867312, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pumpkin_K_2020", "Pumpkin 2020", "K", "Uncommon", 957726558, 5872477622, 1, 1, 1, 5872490600, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghosts_K_2023", "Ghosts 2023", "K", "Common", 121944778, 15037729398, 1, 1, 1, 15091326116, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Fireplace_K_2023", "Fireplace", "K", "Uncommon", 121944778, 15382624195, 1, 1, 1, 15635558021, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gift_K_2020", "Wrap", "K", "Uncommon", 121944778, 6121854102, 1, 1, 1, 6121854816, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Survivors_K_2022", "Makeshift", "K", "Rare", 121944778, 11218956882, 1, 1, 1, 11254180750, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Love_K_2023", "Love 2023", "K", "Common", 10855586895, 12248652835, 1, 1, 1, 12339328595, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Fade", "Fade", "K", "Legendary", 121944778, 288136894, 1, 1, 1, 315501640, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Branches", "Branches", "K", "Uncommon", 957726558, 4210409800, 1, 1, 1, 4210943691, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyAxeBlue", "Blue Swirly", "K", "Unique", 8293463844, 74192567120797, 0.0579, 0.0579, 0.0579, 9552048857, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Candle_K_2020", "Candle", "K", "Common", 957726558, 5872478022, 1, 1, 1, 5872491708, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wavy_K_2024", "Wavy", "K", "Common", 6600901997, 16846003250, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frostflame_K_2024", "Frostflame", "K", "Rare", 6600901997, 121019096457803, 1, 1, 1, 104988218477551, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Leaves_K_2023", "Leaves", "K", "Common", 6600901997, 15081802321, 1, 1, 1, 15091400883, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stickers_X_K_2024", "Stickers 2024 · Stickers_X_K_2024", "K", "Common", 6600901997, 109835260607049, 1, 1, 1, 83843575465564, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle4", "Sparkle4", "K", "Common", 121944778, 306917565, 1, 1, 1, 310712788, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wolf", "Wolf", "K", "Uncommon", 121944778, 531835092, 1, 1, 1, 531873487, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tailslide", "Tailslide", "K", "Common", 121944778, 240942385, 1, 1, 1, 305506822, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Squire", "Squire", "K", "Rare", 121944778, 243372276, 1, 1, 1, 315501560, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Clan", "Clan", "K", "Common", 121944778, 161495171, 1, 1, 1, 235366460, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghosts_K_2020", "Ghosts 2020", "K", "Uncommon", 957726558, 5866362606, 1, 1, 1, 5866442790, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Constellation", "Constellation · Constellation", "G", "Godly", 124598402927958, 79010754957272, 0.1007, 0.1007, 0.1007, 114197436469014, 0, -0.2701, 0.7265, 1, 0, 0, 0, 0.9999, 0.0125, 0, -0.0125, 0.9999 },
+		{ "Ornaments_K_2020", "Ornaments 2020", "K", "Common", 957726558, 6121852598, 1, 1, 1, 6121853160, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bats", "Bats (Rare)", "K", "Rare", 121944778, 531836446, 1, 1, 1, 531873625, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stockings_K_2022", "Stockings 2022", "K", "Uncommon", 957726558, 11824212997, 1, 1, 1, 11834392930, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghastly_K_2023", "Ghastly", "K", "Rare", 121944778, 15029785979, 1, 1, 1, 15091407068, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cookie_K_2021", "Cookie", "K", "Uncommon", 121944778, 8275035982, 1, 1, 1, 8304752586, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Web", "Web", "K", "Legendary", 121944778, 315110729, 1, 1, 1, 315104004, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Santa_K_2018", "Santa 2018", "K", "Common", 121944778, 2659488082, 1, 1, 1, 2669637780, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandySwirl_K_2019", "Candy Swirl", "K", "Rare", 957726558, 4534829449, 1, 1, 1, 4534860226, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cane_K_2018", "Cane 2018", "K", "Rare", 121944778, 2659489980, 1, 1, 1, 2669638508, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Meltdown_K_2023", "Meltdown", "K", "Uncommon", 957726558, 15035536803, 1, 1, 1, 15091340751, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowy2017", "Snowy 2017", "K", "Rare", 121944778, 1268287181, 1, 1, 1, 1268705947, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Slashed_K_2020", "Slashed", "K", "Common", 957726558, 5929316036, 1, 1, 1, 5929317433, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GreenFire", "Green Fire", "K", "Legendary", 121944778, 1268253789, 1, 1, 1, 1268706374, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowflakes_K_2019", "Snowflakes 2019", "K", "Common", 121944778, 4534831727, 1, 1, 1, 4534855045, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Shaded", "Shaded", "K", "Common", 957726558, 4659587929, 1, 1, 1, 4659636085, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ZombifiedK", "Zombified", "K", "Uncommon", 121944778, 114781782298919, 1, 1, 1, 4210928053, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Ancient", "Gingerscythe (Ancient)", "K", "Ancient", 15395668244, 15409195246, 0.0638, 0.0638, 0.0638, 15683188776, 0, -0.22, 0.944, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Reaver_Godly", "Reaver (Godly)", "K", "Godly", 7774174974, 7774175135, 0.25, 0.2499, 0.25, 7791511648, 0, -0.9987, -0.0037, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Canes_K_2023", "Canes", "K", "Uncommon", 121944778, 15381447325, 1, 1, 1, 15635574962, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CamoKnife", "Camo", "K", "Uncommon", 121944778, 3183403069, 1, 1, 1, 3183606225, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SketchYT", "Sketchy", "K", "Common", 121944778, 539831264, 1, 1, 1, 546161470, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hunter_K_2022", "Hunter", "K", "Common", 121944778, 11246309889, 1, 1, 1, 11254154978, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "OverseerKnife", "Overseer", "K", "Legendary", 121944778, 198299790, 1, 1, 1, 198458910, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SilentNight_K_2020", "Silent Night", "K", "Rare", 957726558, 6121850778, 1, 1, 1, 6121851313, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Beach_K_2023", "Beach", "K", "Legendary", 6600901997, 13894391232, 1, 1, 1, 13944136198, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Clownfish_K_2024", "Clownfish", "K", "Common", 6600901997, 18321899540, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Moon_K_2021", "Moon", "K", "Common", 121944778, 7756612294, 1, 1, 1, 7800224197, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Skulls", "Skulls", "K", "Legendary", 957726558, 4210409968, 1, 1, 1, 4210915060, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sweetheart", "Sweetheart", "K", "Common", 121944778, 363142139, 1, 1, 1, 363150761, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Zombified_K_2022", "Zombified 2022", "K", "Rare", 121944778, 11218741536, 1, 1, 1, 11254182560, 0, -1.0087, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SnakebiteK", "Snakebite", "K", "Rare", 957726558, 4210409981, 1, 1, 1, 4210939388, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Waves_K_2024", "Waves 2024", "K", "Rare", 6600901997, 18321898887, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandyCorn_K_2022", "Candy Corn 2022", "K", "Common", 121944778, 11217550170, 1, 1, 1, 11254057417, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CottonCandy", "Cotton Candy", "K", "Legendary", 121944778, 435754345, 1, 1, 1, 435933179, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Static", "Static", "K", "Common", 121944778, 365566391, 1, 1, 1, 365568163, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bats_K_2020", "Bats 2020", "K", "Common", 957726558, 5930584000, 1, 1, 1, 5930729222, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Portal_K_2020", "Portal", "K", "Rare", 957726558, 5866364902, 1, 1, 1, 5866444722, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerbread_K_2019", "Gingerbread 2019", "K", "Uncommon", 957726558, 4534824961, 1, 1, 1, 4534856940, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GhostRbx_K_2022", "Ghostly", "K", "Uncommon", 121944778, 11117362816, 1, 1, 1, 11117375743, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Rose_K_2023", "Rose", "K", "Uncommon", 10855586895, 12238708500, 1, 1, 1, 12339325736, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "LMFAO", "Pink", "K", "Uncommon", 121944778, 473621215, 1, 1, 1, 473626473, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Swirl_K_2021", "Swirl", "K", "Rare", 121944778, 8294015413, 1, 1, 1, 8304757110, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Dew", "Black", "K", "Rare", 121944778, 473621267, 1, 1, 1, 473626646, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Holly_K_2018", "Holly", "K", "Uncommon", 121944778, 2664997532, 1, 1, 1, 2669638990, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ribbon_K_2023", "Ribbon", "K", "Common", 957726558, 15332484220, 1, 1, 1, 15635552019, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Chips", "Blue", "K", "Uncommon", 121944778, 473621164, 1, 1, 1, 473626317, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Candles_K_2024", "Candles", "K", "Common", 6600901997, 137012419503995, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wreaths_K_2024", "Wreaths", "K", "Uncommon", 6600901997, 100835235112831, 1, 1, 1, 78432760615312, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wrapped_K_2024", "Wrapped 2024", "K", "Uncommon", 6600901997, 73121682334065, 1, 1, 1, 72638846676083, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghosts_K_2024", "Ghosts 2024", "K", "Common", 6600901997, 128247285156176, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerbread2017", "Gingerbread 2017", "K", "Rare", 121944778, 1268295971, 1, 1, 1, 1268705527, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hearts", "Hearts", "K", "Common", 121944778, 363311795, 1, 1, 1, 363362737, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sweater_K_2018", "Sweater 2018", "K", "Uncommon", 121944778, 2664997385, 1, 1, 1, 2669640567, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Candied_K_2022", "Candied", "K", "Common", 121944778, 11802560748, 1, 1, 1, 11834384755, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cracks_K_2021", "Cracks", "K", "Common", 121944778, 7756612787, 1, 1, 1, 7800224981, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Aurora_K_2021", "Aurora 2021", "K", "Legendary", 121944778, 8275036346, 1, 1, 1, 8304750877, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "MummyK2018", "Mummy 2018", "K", "Uncommon", 121944778, 2513648136, 1, 1, 1, 2513733542, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle2", "Sparkle2", "K", "Common", 121944778, 306914370, 1, 1, 1, 310710191, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "PumpkinPie_K_2023", "Pumpkin Pie", "K", "Uncommon", 121944778, 15320084464, 1, 1, 1, 15413117611, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle9", "Sparkle9", "K", "Common", 121944778, 306919809, 1, 1, 1, 310715104, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Igloo_K_2024", "Igloo", "K", "Common", 6600901997, 126697433046307, 1, 1, 1, 73203940450745, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammer_Ancient", "Icecrusher (Ancient)", "K", "Ancient", 11848711686, 11850483027, 0.07, 0.07, 0.07, 11855274019, -0.0075, -1.0949, 0.0014, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Doritos", "Purple", "K", "Rare", 121944778, 473621310, 1, 1, 1, 473626740, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frostflame_G_2024", "Frostflame", "G", "Rare", 79401392, 76059118984667, 1.6, 1.6, 1.6, 114781759936576, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Grind", "Grind", "K", "Common", 121944778, 240937041, 1, 1, 1, 305503942, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Blossom", "Blossom", "K", "Common", 121944778, 363138170, 1, 1, 1, 363150561, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cane_K_2021", "Cane 2021", "K", "Common", 121944778, 8293557762, 1, 1, 1, 8304750295, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sandy", "Sandy", "K", "Common", 121944778, 365566396, 1, 1, 1, 365568056, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stainless", "Stainless", "K", "Common", 121944778, 91790701, 1, 1, 1, 235366771, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tiger", "Tiger", "K", "Uncommon", 957726558, 3183403283, 1, 1, 1, 3183606579, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Kraken_K_2024", "Kraken", "K", "Rare", 6600901997, 127474140762204, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Meadow_G_2025", "Meadow", "G", "Uncommon", 79401392, 107182071164823, 1.6, 1.6, 1.6, 107321881182350, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "PumpkinPatch", "Pumpkin", "K", "Common", 957726558, 4210409792, 1, 1, 1, 4210931354, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Fusion", "Fusion", "K", "Legendary", 121944778, 365566399, 1, 1, 1, 365569686, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Future", "Future", "K", "Uncommon", 121944778, 163926951, 1, 1, 1, 197639041, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ollie", "Ollie", "K", "Common", 121944778, 240941633, 1, 1, 1, 305504399, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ToxicK", "Toxic", "K", "Rare", 121944778, 2513648163, 1, 1, 1, 2513734535, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Dark_K_2023", "Darkknife", "K", "Rare", 121944778, 15081468336, 1, 1, 1, 15091343579, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Chromatic_K_2023", "Chromatic", "K", "Legendary", 6600901997, 12927939898, 1, 1, 1, 12965304445, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frostfade_K_2023", "Frostfade", "K", "Legendary", 6600901997, 15344578184, 1, 1, 1, 15635565488, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sub", "Sub", "K", "Common", 121944778, 545569636, 1, 1, 1, 546159250, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stickers_K_2021", "Stickers 2021 · Stickers_K_2021", "K", "Common", 121944778, 7757619418, 1, 1, 1, 7800229084, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hardened", "Hardened", "K", "Common", 957726558, 3183401814, 1, 1, 1, 3183605810, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Robot_K_2024", "Robot", "K", "Rare", 6600901997, 16833551908, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Spider_K_2023", "Spider 2023", "K", "Common", 957726558, 15091217506, 1, 1, 1, 15091399982, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Jellyfish_K_2024", "Jellyfish", "K", "Uncommon", 6600901997, 18321899333, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Circuit", "Circuit", "K", "Uncommon", 121944778, 155356565, 1, 1, 1, 235366945, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Infected_K_2022", "Infected 2022", "K", "Common", 121944778, 11217988441, 1, 1, 1, 11254175272, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "HotChocolate_K_2024", "Hot Chocolate", "K", "Common", 6600901997, 105940775587606, 1, 1, 1, 133307062463653, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "HauntedK", "Haunted", "K", "Common", 121944778, 2513648134, 1, 1, 1, 2513733741, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sweater", "Sweater", "K", "Uncommon", 121944778, 1268293368, 1, 1, 1, 1268704902, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Missing", "Missing", "K", "Uncommon", 121944778, 163625649, 1, 1, 1, 198455936, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sunny_G_2025", "Sunny", "G", "Rare", 79401392, 105937622090347, 1.6, 1.6, 1.6, 93906279038399, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Logcutter_K_2024", "Logcutter", "K", "Rare", 6600901997, 73375064666195, 1, 1, 1, 71088901904009, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Webs", "Webs", "K", "Uncommon", 121944778, 1133322612, 1, 1, 1, 1133325465, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Reindeer_K_2024", "Reindeer", "K", "Common", 6600901997, 121109734938655, 1, 1, 1, 109101361674956, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "DeepSea", "Deep Sea", "K", "Rare", 957726558, 4659571247, 1, 1, 1, 4659634072, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Noodle_K_2023", "Pool Noodle", "K", "Uncommon", 6600901997, 13895318303, 1, 1, 1, 13944133313, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Galaxy", "Galaxy", "K", "Rare", 121944778, 192367012, 1, 1, 1, 192480941, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Spring_K_2024", "Spring", "K", "Rare", 957726558, 16830850572, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Coal_K_2022", "Coal 2022", "K", "Common", 121944778, 11802560508, 1, 1, 1, 11834390120, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Leaf", "Leaf", "K", "Common", 957726558, 4659588788, 1, 1, 1, 4659636452, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Emerald", "Emerald", "K", "Legendary", 121944778, 173946596, 1, 1, 1, 198461276, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Starry_K_2021", "Starry 2021", "K", "Rare", 121944778, 8303534347, 1, 1, 1, 8304757707, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stockings_G_2024", "Stockings 2024", "G", "Common", 6600918074, 75065116268922, 0.0384, 0.0388, 0.0369, 76288270695961, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ginger_K_2018", "Ginger 2018", "K", "Legendary", 121944778, 2659488706, 1, 1, 1, 2669638742, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowfall_K_2023", "Snowfall", "K", "Common", 957726558, 15381549802, 1, 1, 1, 15635568751, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Brains", "Brains", "K", "Common", 121944778, 531864479, 1, 1, 1, 531873956, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Skool", "Skool", "K", "Common", 121944778, 178200933, 1, 1, 1, 295269977, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Valentine", "Valentine", "K", "Common", 121944778, 363139123, 1, 1, 1, 363362726, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frosty", "Frosty", "K", "Uncommon", 121944778, 1268375270, 1, 1, 1, 1268704507, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Giftbag_K_2020", "Gift Bag", "K", "Common", 957726558, 6121846201, 1, 1, 1, 6121847170, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandyCorn_K_2020", "Candy Corn 2020", "K", "Common", 957726558, 5866354929, 1, 1, 1, 5866435364, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frozen_K_2019", "Frozen 2019", "K", "Uncommon", 957726558, 4528568803, 1, 1, 1, 4534857523, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "OrangeMarble", "Orange Marble", "K", "Rare", 121944778, 531653125, 1, 1, 1, 531873011, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gifted", "Gifted", "K", "Uncommon", 121944778, 190131936, 1, 1, 1, 197627734, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Dungeon", "Dungeon", "K", "Rare", 957726558, 4210409814, 1, 1, 1, 4210920512, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle5", "Sparkle5", "K", "Common", 121944778, 306909649, 1, 1, 1, 310713235, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Godly", "Gingerscythe (Godly)", "K", "Godly", 15397282571, 15409017869, 0.0696, 0.0696, 0.0697, 15683175970, 0, -0.94, -0.063, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Rainbow", "Rainbow (Rare)", "K", "Rare", 121944778, 157019835, 1, 1, 1, 159747377, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cardboard", "Cardboard", "K", "Common", 121944778, 159435782, 1, 1, 1, 235366729, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Passion", "Passion", "K", "Common", 121944778, 363139004, 1, 1, 1, 363150334, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Rune", "Rune", "K", "Legendary", 121944778, 3183404423, 1, 1, 1, 3183607894, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bleached", "Bleached", "K", "Common", 121944778, 311711104, 1, 1, 1, 315500879, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "TravelerAxeRed", "Red Traveler's", "K", "Unique", 15057341638, 129174189928841, 0.0681, 0.0681, 0.0681, 15695405379, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Vines_K_2023", "Vines", "K", "Common", 957726558, 15037307112, 1, 1, 1, 15091325210, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowman_K_2021", "Snowman 2021", "K", "Uncommon", 121944778, 8275035798, 1, 1, 1, 8304753468, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghosts_K_2021", "Wraiths", "K", "Uncommon", 121944778, 7808358755, 1, 1, 1, 7808362279, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Krypto", "Krypto", "K", "Rare", 121944778, 155572642, 1, 1, 1, 198458841, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ElderwoodKnife", "Elderwood Blade", "K", "Godly", 11238166013, 11238176757, 0.07, 0.07, 0.07, 11254879631, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Reptile", "Reptile", "K", "Common", 121944778, 162671092, 1, 1, 1, 162672131, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowflake_K_2022", "Snowflake 2022", "K", "Uncommon", 957726558, 11823783274, 1, 1, 1, 11834397133, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eclipse_K_2023", "Eclipse", "K", "Uncommon", 121944778, 15081587332, 1, 1, 1, 15091404278, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Storm_K_2024", "Storm", "K", "Rare", 6600901997, 124972846638078, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Scratch", "Scratch · Scratch", "K", "Legendary", 121944778, 531835091, 1, 1, 1, 531873371, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SantasMagic", "Santa's Magic", "K", "Legendary", 957726558, 4535479726, 1, 1, 1, 4535483042, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Palms_K_2024", "Palms", "K", "Legendary", 6600901997, 18351264716, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Darkness_K_2022", "Darkness", "K", "Common", 121944778, 11217282454, 1, 1, 1, 11254081561, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Constellation_K_2024", "Nightstar", "K", "Legendary", 6600901997, 125699146017319, 1, 1, 1, 113979322866878, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Adurite", "Adurite", "K", "Uncommon", 121944778, 192482160, 1, 1, 1, 192492943, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Prism", "Prism", "K", "Common", 121944778, 297795989, 1, 1, 1, 306046703, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "MummyK", "Mummy", "K", "Uncommon", 121944778, 91472505507923, 1, 1, 1, 1133352032, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Marble_K_2023", "Marble", "K", "Uncommon", 6600901997, 12926768989, 1, 1, 1, 12965302237, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Steel_K_2023", "Steel", "K", "Uncommon", 957726558, 15028885294, 1, 1, 1, 15091405483, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SantasSpirit", "Santa's Spirit", "K", "Legendary", 957726558, 6123356424, 1, 1, 1, 6123357775, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Doge", "Doge", "K", "Uncommon", 121944778, 159758190, 1, 1, 1, 235371276, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "EliteBlue", "Blue Elite", "K", "Legendary", 121944778, 1269369946, 1, 1, 1, 1269374321, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "WitchBrew_K_2024", "Witch's Brew", "K", "Uncommon", 6600901997, 101625224396969, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Log", "Log", "K", "Common", 121944778, 365566383, 1, 1, 1, 365567962, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bunny", "Bunny", "K", "Common", 121944778, 387366668, 1, 1, 1, 387874365, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Combat", "Combat", "K", "Common", 121944778, 3183532466, 1, 1, 1, 3183604570, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Mistletoe_K_2022", "Mistletoe", "K", "Uncommon", 957726558, 11823994753, 1, 1, 1, 11834394793, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Nether", "Nether", "K", "Rare", 121944778, 166089996, 1, 1, 1, 197657098, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Starfish_K_2024", "Starfish", "K", "Common", 6600901997, 18321898656, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Brush", "Brush", "K", "Uncommon", 121944778, 5435976404, 1, 1, 1, 365568602, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "XmasStickers_K_2021", "Stickers 2021 · XmasStickers_K_2021", "K", "Common", 121944778, 8275034832, 1, 1, 1, 8304755417, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Monster_K_2024", "Monster", "K", "Uncommon", 6600901997, 136318121608837, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Fragile_K_2023", "Fragile", "K", "Common", 6600901997, 12936083164, 1, 1, 1, 12965294432, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RedFire", "Red Fire", "K", "Legendary", 121944778, 1269255990, 1, 1, 1, 1269256860, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GreenMarble", "Green Marble", "K", "Rare", 121944778, 110469751488021, 1, 1, 1, 1133366830, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerheart_K_2024", "Gingerheart", "K", "Uncommon", 6600901997, 77403934219171, 1, 1, 1, 115273559455814, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowglobe_K_2023", "Snowglobe", "K", "Rare", 121944778, 15382647009, 1, 1, 1, 15635576863, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Latte_K_2023", "Latte", "K", "Legendary", 121944778, 15319905553, 1, 1, 1, 15413114703, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wood_K_2023", "Wood", "K", "Common", 957726558, 15036170420, 1, 1, 1, 15091401811, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Magma_K_2021", "Magma 2021", "K", "Rare", 121944778, 7756613022, 1, 1, 1, 7800225996, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Goo", "Goo", "K", "Common", 121944778, 178402851, 1, 1, 1, 237336076, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wanwood", "Wanwood", "K", "Uncommon", 121944778, 159653725, 1, 1, 1, 192132094, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Trees_K_2020", "Trees", "K", "Common", 957726558, 75614417738235, 1, 1, 1, 6123336879, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gifts_K_2024", "Gifts 2024", "K", "Common", 6600901997, 80884642545249, 1, 1, 1, 129290011017110, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Lights_K_2019", "Lights 2019", "K", "Uncommon", 121944778, 4534825993, 1, 1, 1, 4534858185, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "TNL", "TNL", "K", "Common", 121944778, 201480146, 1, 1, 1, 201542790, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Elf2017", "Elf 2017", "K", "Common", 121944778, 1268702375, 1, 1, 1, 1268703023, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gothic_K_2021", "Gothic", "K", "Uncommon", 121944778, 7756611289, 1, 1, 1, 7800221141, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowflake_K_2018", "Snowflake 2018", "K", "Uncommon", 121944778, 2659487731, 1, 1, 1, 2669639913, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stalker", "Stalker", "K", "Uncommon", 121944778, 155313728, 1, 1, 1, 198455980, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hazard_K_2022", "Hazard", "K", "Uncommon", 121944778, 11217121434, 1, 1, 1, 11254083234, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "PotionK2018", "Potion 2018", "K", "Uncommon", 957726558, 2513648150, 1, 1, 1, 2513733987, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Marley", "Green", "K", "Common", 121944778, 473620972, 1, 1, 1, 473625785, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bells_K_2023", "Bells", "K", "Common", 121944778, 15382279697, 1, 1, 1, 15635570486, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Lovely", "Lovely", "K", "Common", 957726558, 4659572197, 1, 1, 1, 4659635584, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stars_K_2023", "Stars", "K", "Uncommon", 957726558, 15381316403, 1, 1, 1, 15635559978, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Present", "Present", "K", "Common", 121944778, 1268314631, 1, 1, 1, 1268699212, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Zombie_K_2023", "Zombie 2023", "K", "Uncommon", 957726558, 11218741536, 1, 1, 1, 15091339932, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Copper", "Copper", "K", "Common", 121944778, 3183401534, 1, 1, 1, 3183605392, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Vampire_K_2022", "Vampire 2022", "K", "Legendary", 121944778, 11215450234, 1, 1, 1, 11254125546, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Abstract", "Abstract", "K", "Rare", 121944778, 5437299417, 1, 1, 1, 365569428, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ornament2", "Ornament2", "K", "Common", 121944778, 331744472, 1, 1, 1, 331745341, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Arctic_K_2022", "Arctic", "K", "Legendary", 121944778, 11802561076, 1, 1, 1, 11834401547, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pine_K_2019", "Pine", "K", "Common", 957726558, 4534830880, 1, 1, 1, 4534855710, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Jigsaw", "Jigsaw", "K", "Uncommon", 121944778, 365566397, 1, 1, 1, 365569126, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Nova", "Nova", "K", "Rare", 121944778, 198766824, 1, 1, 1, 235371686, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Xbox", "Xbox", "K", "Common", 121944778, 450680781, 1, 1, 1, 439325100, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Zombie", "Zombie", "K", "Common", 121944778, 1782551901, 1, 1, 1, 1133331875, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Musical", "Musical", "K", "Rare", 121944778, 365566387, 1, 1, 1, 365569566, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sidewinder", "Sidewinder", "K", "Common", 121944778, 295302778, 1, 1, 1, 305503783, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stockings_K_2020", "Stockings 2020", "K", "Common", 957726558, 6123161536, 1, 1, 1, 6123335682, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Choco", "Choco", "K", "Common", 121944778, 386204101, 1, 1, 1, 387874991, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle10", "Sparkle10", "K", "Common", 121944778, 306921666, 1, 1, 1, 310715768, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle8", "Sparkle8", "K", "Common", 121944778, 306913268, 1, 1, 1, 310714407, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Korblox", "Korblox", "K", "Rare", 121944778, 313561541, 1, 1, 1, 315501501, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Aqua", "Aqua", "K", "Common", 121944778, 250006854, 1, 1, 1, 315501208, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Donut", "Donut", "K", "Uncommon", 121944778, 161529618, 1, 1, 1, 235366815, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Spectrum", "Spectrum", "K", "Rare", 121944778, 162718300, 1, 1, 1, 198458862, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Skull_K_2023", "Etched", "K", "Common", 957726558, 15029874889, 1, 1, 1, 15091321393, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SlimeK", "Slime", "K", "Common", 121944778, 2513648162, 1, 1, 1, 2513734227, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowman_K_2018", "Snowman 2018", "K", "Common", 121944778, 2659487396, 1, 1, 1, 2669640152, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GraveK", "Grave", "K", "Common", 2514683594, 2513648160, 1, 1, 1, 2513728474, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Coal_K_2021", "Coal 2021", "K", "Common", 121944778, 8275036203, 1, 1, 1, 8304751659, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sleigh_K_2024", "Sleigh", "K", "Rare", 6600901997, 85646229893233, 1, 1, 1, 74917318027165, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tree_K_2021", "Tree 2021", "K", "Uncommon", 121944778, 8275034131, 1, 1, 1, 8304756423, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Mummy_K_2020", "Mummy 2020", "K", "Uncommon", 121944778, 5866365511, 1, 1, 1, 5866447521, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Carved_K_2020", "Carved", "K", "Common", 957726558, 5866356691, 1, 1, 1, 5866436906, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Damp", "Damp", "K", "Rare", 121944778, 161673042, 1, 1, 1, 198461253, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frosted_K_2019", "Frosted", "K", "Common", 957726558, 4534831933, 1, 1, 1, 4534853444, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowman", "Snowman", "K", "Uncommon", 121944778, 5538532923, 1, 1, 1, 331745799, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Phantom", "Phantom", "K", "Common", 121944778, 1132701173, 1, 1, 1, 1133332075, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bio_K_2023", "Bio", "K", "Rare", 6600901997, 12926766355, 1, 1, 1, 12965298174, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ice", "Ice", "K", "Common", 121944778, 161313071, 1, 1, 1, 191976710, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandyCorn2019", "Candy Corn 2019", "K", "Common", 121944778, 4210409803, 1, 1, 1, 4210934082, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Denis", "Denis", "K", "Common", 121944778, 539825831, 1, 1, 1, 546161062, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Broken_K_2023", "Broken", "K", "Legendary", 10855586895, 12237805628, 1, 1, 1, 12339323856, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BatsK", "Bats (Common)", "K", "Common", 121944778, 2513648113, 1, 1, 1, 2513732731, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Coal", "Coal", "K", "Common", 121944778, 1268280806, 1, 1, 1, 1268699677, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Present_K_2023", "Present 2023", "K", "Common", 121944778, 15382053242, 1, 1, 1, 15635553149, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hive", "Hive", "K", "Uncommon", 121944778, 314921929, 1, 1, 1, 315501434, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Euro", "Euro", "K", "Common", 121944778, 240940193, 1, 1, 1, 305504173, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bones_K_2020", "Bones 2020", "K", "Rare", 957726558, 5872477763, 1, 1, 1, 5872492951, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Icecracker_K_2020", "Icecracker", "K", "Legendary", 957726558, 6121847917, 1, 1, 1, 6121848805, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle7", "Sparkle7", "K", "Common", 121944778, 306913560, 1, 1, 1, 310714089, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Corl", "Corl", "K", "Common", 121944778, 545392975, 1, 1, 1, 546161858, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle3", "Sparkle3", "K", "Common", 121944778, 306916804, 1, 1, 1, 310710694, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Carrot", "Carrot", "K", "Common", 121944778, 387418042, 1, 1, 1, 387874071, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Icicles_K_2018", "Icicles", "K", "Rare", 121944778, 2659488219, 1, 1, 1, 2669639638, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Glowy_K_2023", "Glowy", "K", "Uncommon", 121944778, 15091291377, 1, 1, 1, 15091403551, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tree2017", "Tree 2017", "K", "Uncommon", 121944778, 108294449974966, 1, 1, 1, 1268704124, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Santa", "Santa", "K", "Common", 121944778, 5359654461, 1, 1, 1, 331746096, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Coal_K_2018", "Coal 2018", "K", "Common", 121944778, 2669120347, 1, 1, 1, 2669638285, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Oily", "Oily", "K", "Common", 121944778, 314421009, 1, 1, 1, 315501170, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bats_K_2024", "Bats 2024", "K", "Common", 6600901997, 134605667915149, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Fanta", "Orange", "K", "Common", 121944778, 473621067, 1, 1, 1, 473626025, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Popsicle_K_2023", "Popsicle", "K", "Uncommon", 6600901997, 13884848877, 1, 1, 1, 13944131578, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ripper_K_2020", "Ripper", "K", "Legendary", 957726558, 5866360934, 1, 1, 1, 5866441301, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Witch", "Witch", "K", "Common", 121944778, 531836445, 1, 1, 1, 531873553, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Reaver_Ancient", "Reaver (Ancient)", "K", "Ancient", 7774148738, 7774148967, 0.2726, 0.2726, 0.2726, 7791640819, 0, -0.094, 0.0422, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Runic_K_2022", "Curse", "K", "Rare", 121944778, 11246439789, 1, 1, 1, 11254123390, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Midnight", "Midnight", "K", "Legendary", 121944778, 161367322, 1, 1, 1, 197664126, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Borders", "Borders", "K", "Common", 121944778, 155199285, 1, 1, 1, 198453499, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Toy_K_2023", "Toy", "K", "Common", 6600901997, 13884851371, 1, 1, 1, 13944128440, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ecto", "Ecto", "K", "Common", 121944778, 1132715027, 1, 1, 1, 1133331679, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Painted_K_2023", "Painted", "K", "Rare", 6600901997, 12935208652, 1, 1, 1, 12965311567, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Splatter", "Splatter", "K", "Common", 121944778, 16944380350, 1, 1, 1, 16964346058, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Plasmite", "Plasmite", "K", "Legendary", 121944778, 161369273, 1, 1, 1, 161369368, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Watcher_K_2021", "Watcher 2021", "K", "Rare", 121944778, 7756613596, 1, 1, 1, 7800227475, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Mummified", "Mummified", "K", "Common", 957726558, 4210409851, 1, 1, 1, 4210946577, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hazmat", "Hazmat", "K", "Uncommon", 121944778, 311358906, 1, 1, 1, 315501297, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stickers_K_2024", "Stickers 2024 · Stickers_K_2024", "K", "Common", 6600901997, 121348523107585, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ginger", "Ginger", "K", "Rare", 121944778, 5353674093, 1, 1, 1, 331744703, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eco", "Eco", "K", "Common", 121944778, 365566401, 1, 1, 1, 365567889, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Indy", "Indy", "K", "Common", 121944778, 240943629, 1, 1, 1, 305506951, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tree_K_2022", "Tree 2022", "K", "Rare", 957726558, 11803199540, 1, 1, 1, 11834400185, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Carrot_K_2023", "Carrot 2023", "K", "Uncommon", 6600901997, 12928323969, 1, 1, 1, 12965307410, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandyCorn_K_2024", "Candy Corn 2024", "K", "Common", 6600901997, 76315981363183, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerbread_K_2020", "Gingerbread 2020", "K", "Uncommon", 957726558, 6121849468, 1, 1, 1, 6121850031, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Traveler_K_2023", "Traveler", "K", "Legendary", 957726558, 15069923204, 1, 1, 1, 15091407901, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "HighTech", "High Tech", "K", "Uncommon", 957726558, 4659546595, 1, 1, 1, 4659635055, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bluesteel", "Bluesteel", "K", "Uncommon", 121944778, 157904876, 1, 1, 1, 159947939, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Lucky", "Lucky", "K", "Uncommon", 121944778, 365566400, 1, 1, 1, 365569265, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wrapped", "Wrapped", "K", "Uncommon", 121944778, 5366242489, 1, 1, 1, 331745500, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowman_K_2024", "Snowman 2024", "K", "Uncommon", 6600901997, 75066955538535, 1, 1, 1, 85751270338066, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowman_K_2022", "Snowman 2022", "K", "Common", 957726558, 11823641715, 1, 1, 1, 11834391469, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VoidRbx", "Void", "K", "Uncommon", 121944778, 11548074269, 1, 1, 1, 11548082732, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cursed_K_2024", "Cursed", "K", "Legendary", 6600901997, 137589393181339, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Spectral_K_2021", "Spectral", "K", "Legendary", 121944778, 7756613337, 1, 1, 1, 7800226793, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Graffiti", "Graffiti", "K", "Uncommon", 957726558, 4659573175, 1, 1, 1, 4659634630, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Moons_K_2024", "Moons 2024", "K", "Uncommon", 6600901997, 87244940102225, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pepper", "Brown", "K", "Common", 121944778, 473620934, 1, 1, 1, 473625645, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cheesy", "Cheesy", "K", "Uncommon", 121944778, 161425686, 1, 1, 1, 198455898, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Giftwrap_K_2021", "Giftwrap", "K", "Common", 121944778, 8275035514, 1, 1, 1, 8304754179, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Haunted_K_2021", "Haunted 2021", "K", "Common", 121944778, 7756611602, 1, 1, 1, 7800222135, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Floral_K_2023", "Floral", "K", "Rare", 6600901997, 13894957068, 1, 1, 1, 13944135218, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghosty", "Ghosty", "K", "Common", 121944778, 531835085, 1, 1, 1, 531873080, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Paper", "Paper", "K", "Uncommon", 121944778, 179035664, 1, 1, 1, 235366870, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Carrot_K_2024", "Carrot 2024", "K", "Uncommon", 6600901997, 16845528588, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bones", "Bones", "K", "Common", 121944778, 531836449, 1, 1, 1, 531873816, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "MagmaK", "Magma", "K", "Rare", 121944778, 1782168732, 1, 1, 1, 1133317890, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Zombie_K_2021", "Zombie 2021", "K", "Uncommon", 121944778, 7845697152, 1, 1, 1, 7800222975, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wraith_K_2022", "Wraith", "K", "Rare", 121944778, 11215449757, 1, 1, 1, 11254118399, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Melon", "Melon", "K", "Uncommon", 121944778, 311701292, 1, 1, 1, 315501369, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cavern_K_2019", "Cavern", "K", "Legendary", 957726558, 4534822092, 1, 1, 1, 4534861110, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Neon", "Neon", "K", "Common", 121944778, 159653652, 1, 1, 1, 159746637, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ornament1", "Ornament (Common)", "K", "Common", 121944778, 331744475, 1, 1, 1, 331745428, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eggs", "Egg", "K", "Common", 121944778, 386052294, 1, 1, 1, 387875405, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Roses", "Roses", "K", "Common", 121944778, 361630297, 1, 1, 1, 363352002, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frozen_K_2023", "Frozen 2023", "K", "Common", 121944778, 15382634403, 1, 1, 1, 15635556891, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle1", "Sparkle1", "K", "Common", 121944778, 306912202, 1, 1, 1, 310709709, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Checker", "Checker", "K", "Uncommon", 121944778, 160167441, 1, 1, 1, 198461230, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Summer_Stickers_K_2023", "Stickers 2023", "K", "Common", 6600901997, 13895498375, 1, 1, 1, 13944129977, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cane", "Cane", "K", "Rare", 121944778, 5359571109, 1, 1, 1, 331140746, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Jack_K_2022", "Lantern", "K", "Uncommon", 121944778, 11245572024, 1, 1, 1, 11254093910, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sorry", "Corrupt", "K", "Unique", 121944778, 162016526, 1, 1, 1, 197879343, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowflakes_K_2020", "Snowflakes 2020", "K", "Rare", 121944778, 137773102398455, 1, 1, 1, 6123338102, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Scarf_K_2023", "Scarf", "K", "Common", 121944778, 15414881863, 1, 1, 1, 15415482999, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Santa2017", "Santa 2017", "K", "Common", 121944778, 1268277801, 1, 1, 1, 1268703618, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Brains2019", "Brains 2019", "K", "Uncommon", 957726558, 4210409062, 1, 1, 1, 4210929184, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Vortex", "Vortex", "K", "Rare", 121944778, 235347825, 1, 1, 1, 235371508, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Stickers_K_2022", "Stickers 2022 · Stickers_K_2022", "K", "Common", 121944778, 11217750489, 1, 1, 1, 11254067158, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Elf", "Elf", "K", "Common", 121944778, 5364286895, 1, 1, 1, 331746317, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ribbons_K_2021", "Ribbons", "K", "Common", 121944778, 8275035072, 1, 1, 1, 8304754882, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sparkle6", "Sparkle6", "K", "Common", 121944778, 306915414, 1, 1, 1, 310713648, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RbxScary_K_2023", "Ghoulish", "K", "Common", 121944778, 114660299589667, 1, 1, 1, 14967668214, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Vampire", "Vampire", "K", "Uncommon", 121944778, 531835090, 1, 1, 1, 531873248, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Fragile_G_2023", "Fragile", "G", "Common", 79401392, 12942152157, 1.5, 1.5, 1.5, 12965349193, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GraveG", "Grave", "G", "Common", 2514719081, 2513648170, 1, 1, 1, 2513731746, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GreenCamo_K_2022", "Zombie Camo", "K", "Common", 121944778, 121944805, 1, 1, 1, 11254145154, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wrapped_G_2018", "Wrapped 2018", "G", "Common", 79401392, 124221082305936, 1.6, 1.6, 1.6, 2669787533, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Wraith_G_2022", "Wraith", "G", "Rare", 79401392, 83637468346183, 1.6, 1.6, 1.6, 11255504462, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Webs_G_2022", "Webs", "G", "Common", 79401392, 11255255382, 1.6, 1.6, 1.6, 11284147880, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "WebbedG", "Webbed", "G", "Common", 79401392, 130141624327731, 1.6, 1.6, 1.6, 4210936652, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Wavy_G_2024", "Wavy", "G", "Common", 79401392, 16846545641, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Vines_G_2023", "Vines", "G", "Common", 79401392, 15045930187, 1.6, 1.6, 1.6, 15091402817, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Vampire_G_2022", "Vampire 2022", "G", "Legendary", 79401392, 11228808312, 1.6, 1.6, 1.6, 11255503583, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Tree_G_2022", "Tree 2022", "G", "Rare", 79401392, 77983878883558, 1.6, 1.6, 1.6, 11834441321, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Traveler_G_2023", "Traveler", "G", "Legendary", 79401392, 89199801409332, 1.6, 1.6, 1.6, 15091344462, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "ToxicG", "Toxic", "G", "Rare", 79401392, 2513648169, 1.6, 1.6, 1.6, 2513742519, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Sweater_G_2018", "Sweater 2018", "G", "Uncommon", 79401392, 2664997267, 1.6, 1.6, 1.6, 2669787088, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Stockings_G_2022", "Stockings 2022", "G", "Uncommon", 79401392, 11831384378, 1.6, 1.6, 1.6, 11834440319, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "StickersX_G_2022", "Stickers 2022", "G", "Common", 79401392, 11830420444, 1.6, 1.6, 1.6, 11834432971, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Steel_G_2023", "Steel", "G", "Uncommon", 79401392, 15044112684, 1.6, 1.6, 1.6, 15091341552, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Stars_G_2023", "Stars", "G", "Uncommon", 79401392, 15383997060, 1.6, 1.6, 1.6, 15635574031, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Starry_G_2020", "Starry 2020", "G", "Common", 79401392, 5930583738, 1.6, 1.6, 1.6, 5930731295, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Starfish_G_2024", "Starfish", "G", "Common", 79401392, 18321970590, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Splat", "Splat", "G", "Common", 79401392, 3183406439, 1.6, 1.6, 1.6, 3183639522, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Spectral_G_2021", "Spectral", "G", "Legendary", 79401392, 7757802804, 1.6, 1.6, 1.6, 7800255531, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowman_G_2023", "Snowman 2023", "G", "Uncommon", 79401392, 15382659346, 1.6, 1.6, 1.6, 15635572427, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowman_G_2022", "Snowman 2022", "G", "Common", 79401392, 11830604534, 1.6, 1.6, 1.6, 11834436620, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowflakes_G_2019", "Snowflakes", "G", "Common", 79401392, 4534835479, 1.6, 1.6, 1.6, 4534866065, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowman_G_2018", "Snowman 2018", "G", "Common", 79401392, 2669119107, 1.6, 1.6, 1.6, 2669786846, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowflake_G_2023", "Snowflake 2023", "G", "Rare", 79401392, 15351058932, 1.6, 1.6, 1.6, 15635575718, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowflake_G_2022", "Snowflake 2022", "G", "Uncommon", 79401392, 11830940122, 1.6, 1.6, 1.6, 11834437796, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowflake_G_2018", "Snowflake 2018", "G", "Uncommon", 79401392, 2659487954, 1.6, 1.6, 1.6, 2669786515, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SnakebiteG", "Snakebite", "G", "Rare", 79401392, 109575851098597, 1.6, 1.6, 1.6, 4210925026, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SlimeG", "Slime", "G", "Common", 79401392, 2513648152, 1.6, 1.6, 1.6, 2513742319, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SilentNight_G_2020", "Silent Night", "G", "Rare", 79401392, 6121861331, 1.6, 1.6, 1.6, 6121862034, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Santa_G_2023", "Santa 2023", "G", "Common", 79401392, 15349904283, 1.6, 1.6, 1.6, 15635550625, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Santa_G_2018", "Elf 2018", "G", "Common", 79401392, 2664997044, 1.6, 1.6, 1.6, 2669785184, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Sandy_G_2024", "Sandy", "G", "Common", 79401392, 18323743340, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "RainbowGun", "Rainbow", "G", "Rare", 79401392, 3183408196, 1.6, 1.6, 1.6, 3183640145, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Pumpkin_G_2023", "Pumpkin", "G", "Common", 79401392, 15044730839, 1.6, 1.6, 1.6, 15091327743, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "PotionG2018", "Potion", "G", "Uncommon", 79401392, 2513648149, 1.6, 1.6, 1.6, 2513742133, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Predator", "Predator", "G", "Legendary", 79401392, 202773960, 1.6, 1.6, 1.6, 203810176, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Portal_G_2020", "Portal", "G", "Uncommon", 79401392, 5866372960, 1.6, 1.6, 1.6, 5866461926, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Popsicle_G_2024", "Popsicle", "G", "Uncommon", 79401392, 18321970792, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Pirate", "Pirate", "G", "Uncommon", 79401392, 78093206510643, 1.6, 1.6, 1.6, 3183639867, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Pine_G_2019", "Pine", "G", "Common", 79401392, 4534870630, 1.6, 1.6, 1.6, 4534871260, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Palms_G_2024", "Palms", "G", "Legendary", 79401392, 18321971106, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ornaments_G_2020", "Ornaments", "G", "Common", 79401392, 6121862915, 1.6, 1.6, 1.6, 6121863515, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Neon_G_2023", "Neon", "G", "Rare", 79401392, 15382654157, 1.6, 1.6, 1.6, 15635560825, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Mummy", "Mummy", "G", "Rare", 79401392, 315154445, 1.6, 1.6, 1.6, 315155591, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Moonlight_G_2022", "Moonlight", "G", "Uncommon", 79401392, 11254380241, 1.6, 1.6, 1.6, 11284143055, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Mistletoe_G_2022", "Mistletoe", "G", "Uncommon", 79401392, 11831277409, 1.6, 1.6, 1.6, 11834438982, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Latte_G_2023", "Latte", "G", "Legendary", 79401392, 15320206276, 1.6, 1.6, 1.6, 15413116029, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Infected_G_2022", "Infected", "G", "Common", 79401392, 11227996367, 1.6, 1.6, 1.6, 11255502768, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Icicles_G_2018", "Icicles", "G", "Rare", 79401392, 2659488496, 1.6, 1.6, 1.6, 2669786044, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Icedriller_G_2020", "Icedriller", "G", "Legendary", 79401392, 6121865669, 1.6, 1.6, 1.6, 6121866490, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "IceCamo_G_2021", "Ice Camo", "G", "Rare", 79401392, 8275032575, 1.6, 1.6, 1.6, 8304767724, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Holly_G_2018", "Holly", "G", "Uncommon", 79401392, 2664997622, 1.6, 1.6, 1.6, 2669786261, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Hazard_G_2022", "Hazard", "G", "Uncommon", 79401392, 11227146152, 1.6, 1.6, 1.6, 11255505449, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "HauntedG", "Haunted", "G", "Common", 79401392, 2513648133, 1.6, 1.6, 1.6, 2513741901, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingerbread_G_2022", "Gingerbread 2022", "G", "Rare", 79401392, 11810420546, 1.6, 1.6, 1.6, 11834442414, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingerbread_G_2021", "Gingerbread 2021", "G", "Uncommon", 79401392, 8275032201, 1.6, 1.6, 1.6, 8304772140, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingerbread_G_2020", "Gingerbread 2020", "G", "Uncommon", 79401392, 6121859173, 1.6, 1.6, 1.6, 6121860619, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ginger_G_2018", "Ginger 2018", "G", "Legendary", 79401392, 2659488834, 1.6, 1.6, 1.6, 2669785821, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gifts_G_2019", "Gifts", "G", "Common", 79401392, 4534835908, 1.6, 1.6, 1.6, 4534867381, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Giftbag_G_2020", "Gift Bag", "G", "Common", 79401392, 6121864116, 1.6, 1.6, 1.6, 6121864813, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gift_G_2020", "Wrap", "G", "Uncommon", 79401392, 6121866988, 1.6, 1.6, 1.6, 6121867603, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ghosts_G_2021", "Wraiths", "G", "Uncommon", 79401392, 7758397251, 1.6, 1.6, 1.6, 7800251557, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ghosts_G_2020", "Ghosts", "G", "Rare", 79401392, 5866372208, 1.6, 1.6, 1.6, 5866465099, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ghostfire_G_2022", "Ghostfire", "G", "Rare", 79401392, 11254634864, 1.6, 1.6, 1.6, 11284140034, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GhostG2018", "Ghost", "G", "Legendary", 79401392, 2513648114, 1.6, 1.6, 1.6, 2513741407, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ghastly_G_2023", "Ghastly", "G", "Rare", 79401392, 15045716708, 1.6, 1.6, 1.6, 15091342564, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Frozen_G_2023", "Frozen 2023", "G", "Common", 79401392, 15344638282, 1.6, 1.6, 1.6, 15635571468, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Frostfade_G_2023", "Frostfade", "G", "Legendary", 79401392, 15383614259, 1.6, 1.6, 1.6, 15635577623, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Frosted_G_2019", "Frosted", "G", "Common", 79401392, 4528661069, 1.6, 1.6, 1.6, 4534866678, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Floatie_G_2024", "Floatie", "G", "Uncommon", 79401392, 18321972013, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "FallCamo_G_2021", "Fall Camo", "G", "Uncommon", 79401392, 7758737021, 1.6, 1.6, 1.6, 7800257544, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Eyes_G_2020", "Watcher 2020", "G", "Common", 79401392, 5866372450, 1.6, 1.6, 1.6, 5866459380, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Elf_G_2023", "Elf 2023", "G", "Common", 79401392, 15349698419, 1.6, 1.6, 1.6, 15635569893, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "DefaultGun", "Default Gun", "G", "Common", 79401392, 91723031, 1.6, 1.6, 1.6, 197518111, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Darkness_G_2022", "Darkness", "G", "Common", 79401392, 11242038756, 1.6, 1.6, 1.6, 11255507374, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Dark_G_2023", "Darkgun", "G", "Rare", 79401392, 15082826256, 1.6, 1.6, 1.6, 15091406343, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cookie_G_2021", "Cookie", "G", "Uncommon", 79401392, 8275032831, 1.6, 1.6, 1.6, 8304771148, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Coal_G_2021", "Coal 2021", "G", "Common", 79401392, 8275033614, 1.6, 1.6, 1.6, 8304769409, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Coal_G_2022", "Coal 2022", "G", "Common", 79401392, 11809114380, 1.6, 1.6, 1.6, 11834434264, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Coal_G_2018", "Coal 2018", "G", "Common", 79401392, 2669120201, 1.6, 1.6, 1.6, 2669784920, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Clownfish_G_2024", "Clownfish", "G", "Common", 79401392, 18321972771, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cavern_G_2019", "Cavern", "G", "Legendary", 79401392, 128240852390197, 1.6, 1.6, 1.6, 4534875511, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cat_G_2021", "Cat", "G", "Common", 79401392, 7759004533, 1.6, 1.6, 1.6, 7800253444, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Carved_G_2020", "Carved", "G", "Common", 79401392, 5866372800, 1.6, 1.6, 1.6, 5866457985, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Carrot_G_2024", "Carrot", "G", "Uncommon", 79401392, 16856497935, 1.6, 1.6, 1.6, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Canes_G_2023", "Canes", "G", "Uncommon", 79401392, 15383886872, 1.6, 1.6, 1.6, 15635558982, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "CandySwirl_G_2019", "Candy Swirl", "G", "Rare", 79401392, 4534836730, 1.6, 1.6, 1.6, 4534874602, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cane_G_2018", "Cane 2018", "G", "Rare", 79401392, 2659489762, 1.6, 1.6, 1.6, 2669785546, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "CandyCorn_G_2022", "Candy Corn 2022", "G", "Common", 79401392, 11226919330, 1.6, 1.6, 1.6, 11255558166, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Candied_G_2022", "Candied", "G", "Common", 79401392, 11809753556, 1.6, 1.6, 1.6, 11834435627, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Brains_G_2022", "Brains", "G", "Uncommon", 79401392, 11254925304, 1.6, 1.6, 1.6, 11284145298, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Bones2019", "Bones", "G", "Uncommon", 79401392, 4210405561, 1.6, 1.6, 1.6, 4210926347, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "BatsG", "Bats", "G", "Common", 79401392, 2513648112, 1.6, 1.6, 1.6, 2513741174, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Apoc_G_2022", "Apocalypse", "G", "Common", 79401392, 11228269165, 1.6, 1.6, 1.6, 11255501940, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Arctic_G_2022", "Arctic", "G", "Legendary", 79401392, 85287913991189, 1.6, 1.6, 1.6, 11834443783, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Watcher_G_2021", "Watcher 2021", "G", "Rare", 79401392, 7757907850, 1.5, 1.5, 1.5, 7800256309, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Floral_G_2024", "Floral", "G", "Rare", 79401392, 18323742549, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Melon_G_2023", "Melon", "G", "Uncommon", 79401392, 13904908523, 1.5, 1.5, 1.5, 13944154336, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Starry_G_2021", "Starry 2021", "G", "Rare", 79401392, 8303507091, 1.5, 1.5, 1.5, 8304772774, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Toy_G_2023", "Toy", "G", "Common", 79401392, 13905642635, 1.5, 1.5, 1.5, 13944153112, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Camo", "Camo", "G", "Uncommon", 79401392, 160024546, 1.5, 1.5, 1.5, 160024789, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Star", "Star", "G", "Common", 79401392, 161642996, 1.5, 1.5, 1.5, 203807904, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GoldenGun", "Golden", "G", "Classic", 25298496, 134632723, 1.5, 1.5, 1.5, 147835357, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Wooden", "Wooden", "G", "Uncommon", 79401392, 84001524223260, 1.5, 1.5, 1.5, 238546356, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "iRevolver", "iRevolver", "G", "Rare", 79401392, 160219396, 1.5, 1.5, 1.5, 203809168, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Magma_G_2021", "Magma", "G", "Rare", 79401392, 7758322982, 1.5, 1.5, 1.5, 7800252572, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SnowmanGun", "Snowman", "G", "Uncommon", 79401392, 332496723, 1.5, 1.5, 1.5, 332497603, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Sketch", "Sketch", "G", "Uncommon", 79401392, 161976144, 1.5, 1.5, 1.5, 203808108, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "ElfGun", "Elf", "G", "Common", 79401392, 86899632763415, 1.5, 1.5, 1.5, 332767999, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ritual_G_2024", "Ritual", "G", "Rare", 79401392, 122499606241450, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SlouseClownGun", "Clown", "G", "Unique", 79401392, 4663058089, 1.5, 1.5, 1.5, 4659627976, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ornament2Gun", "Ornament2", "G", "Common", 79401392, 332496722, 1.5, 1.5, 1.5, 332497550, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "MummyG2018", "Mummy 2018", "G", "Uncommon", 79401392, 2513708668, 1.5, 1.5, 1.5, 2513741663, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "ZombifiedG", "Zombified", "G", "Uncommon", 79401392, 137443657929688, 1.5, 1.5, 1.5, 4210944924, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Aliens_G_2021", "Aliens", "G", "Common", 79401392, 94636545088559, 1.5, 1.5, 1.5, 7800250906, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "CaneGun", "Cane", "G", "Rare", 79401392, 112112286408164, 1.5, 1.5, 1.5, 332497187, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Bacon", "Bacon", "G", "Rare", 79401392, 178240361, 1.5, 1.5, 1.5, 238546467, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GingerGun", "Ginger", "G", "Rare", 79401392, 140264190350882, 1.5, 1.5, 1.5, 332497038, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Bats_G_2024", "Bats 2024", "G", "Common", 79401392, 127442391741629, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Lights_G_2019", "Lights 2019", "G", "Uncommon", 79401392, 4534840659, 1.5, 1.5, 1.5, 4534872673, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Molten", "Molten", "G", "Rare", 79401392, 160570263, 1.5, 1.5, 1.5, 203869308, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingerbread_G_2019", "Gingerbread 2019", "G", "Uncommon", 79401392, 4534842979, 1.5, 1.5, 1.5, 4534872116, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Galactic", "Galactic", "G", "Rare", 79401392, 173912996, 1.5, 1.5, 1.5, 173913533, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Engraved", "Engraved", "G", "Common", 79401392, 159670413, 1.5, 1.5, 1.5, 203807690, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SantaGun", "Santa", "G", "Common", 79401392, 76370731428901, 1.5, 1.5, 1.5, 332496861, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Nuke_G_2023", "Nuke", "G", "Rare", 79401392, 12936824008, 1.5, 1.5, 1.5, 12965335931, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "BluesteelGun", "Bluesteel", "G", "Uncommon", 79401392, 161420087, 1.5, 1.5, 1.5, 162668203, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ornament1Gun", "Ornament1", "G", "Common", 79401392, 332358313, 1.5, 1.5, 1.5, 332497144, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Bleed", "Rupture", "G", "Legendary", 79401392, 315010891, 1.5, 1.5, 1.5, 315100702, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Candleflame_G_2024", "Candleflame", "G", "Rare", 79401392, 115359559909377, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Marina", "Marina", "G", "Uncommon", 79401392, 159899596, 1.5, 1.5, 1.5, 203808190, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "XmasStickers_G_2021", "Stickers 2021 · XmasStickers_G_2021", "G", "Common", 79401392, 110585366732058, 1.6, 1.6, 1.6, 8304770115, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cracks_G_2021", "Cracks", "G", "Common", 79401392, 7758056748, 1.5, 1.5, 1.5, 7800254737, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Stickers_G_2021", "Stickers 2021 · Stickers_G_2021", "G", "Common", 79401392, 7758615144, 1.5, 1.5, 1.5, 7800257010, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "WrappedGun", "Wrapped", "G", "Uncommon", 79401392, 103005044438900, 1.5, 1.5, 1.5, 332497103, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Caution", "Caution", "G", "Uncommon", 79401392, 48737841, 1.5, 1.5, 1.5, 238546422, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "HL2", "HL2", "G", "Common", 79401392, 181689885, 1.5, 1.5, 1.5, 238546100, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "WaterBalloons_G_2024", "Balloons", "G", "Common", 79401392, 18323742698, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gun1", "Cowboy", "G", "Classic", 79401392, 79401500, 1.5, 1.5, 1.5, 144290769, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Sunset_G_2023", "Sun", "G", "Rare", 79401392, 13896017136, 1.5, 1.5, 1.5, 13944156090, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Nightfire", "Nightfire", "G", "Rare", 79401392, 4659577665, 1.5, 1.5, 1.5, 4659626966, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Frozen_G_2019", "Frozen 2019", "G", "Uncommon", 79401392, 4528661973, 1.5, 1.5, 1.5, 4534873956, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Summer_Stickers_G_2023", "Stickers 2023", "G", "Common", 79401392, 13905821320, 1.5, 1.5, 1.5, 13944151909, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ace", "Ace", "G", "Rare", 79401392, 178208194, 1.5, 1.5, 1.5, 238546577, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Asteroid", "Asteroid", "G", "Common", 79401392, 6394252363, 1.5, 1.5, 1.5, 476599365, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Mummy_G_2020", "Mummy 2020", "G", "Uncommon", 79401392, 5866372623, 1.5, 1.5, 1.5, 5866463755, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Night", "Night", "G", "Uncommon", 79401392, 159882296, 1.5, 1.5, 1.5, 159971385, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Splash_G", "Splash", "G", "Legendary", 79401392, 4659576260, 1.5, 1.5, 1.5, 4659626370, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "CandyCorn_G_2024", "Candy Corn 2024", "G", "Common", 79401392, 110799536201694, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Painted_G_2023", "Painted", "G", "Uncommon", 79401392, 12937817240, 1.5, 1.5, 1.5, 12965344675, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Spitfire", "Spitfire", "G", "Rare", 79401392, 159883934, 1.5, 1.5, 1.5, 159971321, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowman_G_2021", "Snowman 2021", "G", "Uncommon", 79401392, 8275033129, 1.5, 1.5, 1.5, 8304766932, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "VampireG2018", "Vampire 2018", "G", "Rare", 79401392, 2513708622, 1.5, 1.5, 1.5, 2513742751, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Imbued", "Imbued", "G", "Rare", 79401392, 156263287, 1.5, 1.5, 1.5, 162668312, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Pea", "Pea", "G", "Common", 79401392, 162911948, 1.5, 1.5, 1.5, 238545971, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Viper", "Viper", "G", "Legendary", 79401392, 159991281, 1.5, 1.5, 1.5, 160299600, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Universe", "Universe", "G", "Legendary", 79401392, 238542777, 1.5, 1.5, 1.5, 238546660, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "TreeGun", "Tree", "G", "Legendary", 79401392, 106909830955114, 1.5, 1.5, 1.5, 332497688, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Nutcracker", "Nutcracker", "G", "Uncommon", 79401392, 5538506180, 1.5, 1.5, 1.5, 332497657, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Infiltrator", "Infiltrator", "G", "Common", 79401392, 156265112, 1.5, 1.5, 1.5, 203806022, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Clown_G_2024", "Clown 2024", "G", "Uncommon", 79401392, 83300450889998, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "BigKill", "Big Kill", "G", "Common", 79401392, 159963965, 1.5, 1.5, 1.5, 162669041, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Aurora_G_2019", "Aurora 2019", "G", "Rare", 79401392, 70440729181948, 1.5, 1.5, 1.5, 4534875165, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "ZombieG2018", "Zombie", "G", "Uncommon", 79401392, 140056674605111, 1.5, 1.5, 1.5, 2513743298, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "RIP", "RIP", "G", "Common", 79401392, 4210409923, 1.5, 1.5, 1.5, 4210947993, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "CandyCorn_G_2020", "Candy Corn 2020", "G", "Common", 79401392, 5866371945, 1.5, 1.5, 1.5, 5866454590, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cold", "Cold", "G", "Common", 79401392, 161309663, 1.5, 1.5, 1.5, 161309889, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Leaves_G_2024", "Leaves", "G", "Uncommon", 79401392, 105437948088593, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Overseer", "Overseer", "G", "Legendary", 79401392, 162262248, 1.5, 1.5, 1.5, 175668680, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Stickers_G_2024", "Stickers 2024 · Stickers_G_2024", "G", "Common", 79401392, 89311097227409, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Sparkle", "Sparkle", "G", "Legendary", 79401392, 162976205, 1.5, 1.5, 1.5, 203869110, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Hacker", "Hacker", "G", "Rare", 79401392, 198413638, 1.5, 1.5, 1.5, 203819271, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cursed_G_2024", "Cursed", "G", "Legendary", 79401392, 134978959658778, 1.5, 1.5, 1.5, 0, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "LoveGun", "Love", "G", "Uncommon", 79401392, 159686237, 1.5, 1.5, 1.5, 203867650, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Iron", "Iron", "G", "Common", 79401392, 159707533, 1.5, 1.5, 1.5, 160201541, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Fallout", "Fallout", "G", "Common", 79401392, 172596465, 1.5, 1.5, 1.5, 175668592, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cola", "Soda", "G", "Uncommon", 79401392, 320398770, 1.5, 1.5, 1.5, 238546400, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gothic_G_2021", "Gothic", "G", "Uncommon", 79401392, 7758572472, 1.5, 1.5, 1.5, 7800253970, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Monster", "Monster", "G", "Rare", 79401392, 4210409812, 1.5, 1.5, 1.5, 4210941474, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Aid", "Juice", "G", "Common", 79401392, 7164849213, 1.5, 1.5, 1.5, 203807397, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Ripper_G_2020", "Ripper", "G", "Legendary", 79401392, 5866373797, 1.5, 1.5, 1.5, 5866460591, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Aurora_G_2021", "Aurora 2021", "G", "Legendary", 79401392, 96698273353001, 1.5, 1.5, 1.5, 8304766165, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Chromatic_G_2023", "Chromatic", "G", "Legendary", 79401392, 12937562728, 1.5, 1.5, 1.5, 12965339774, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Bit", "Bit", "G", "Common", 79401392, 178259396, 1.5, 1.5, 1.5, 238549030, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "News", "News", "G", "Common", 79401392, 178238688, 1.5, 1.5, 1.5, 238546032, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Cheddar", "Cheddar", "G", "Uncommon", 79401392, 160274812, 1.5, 1.5, 1.5, 203808317, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SawChroma", "Saw · SawChroma", "K", "Godly", 168119698, 3171086347, 0.5, 0.5, 0.55, 3187398132, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Knife1", "Splitter", "K", "Classic", 22771612, 22771560, 0.15, 0.15, 0.15, 143820641, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Icewing", "Icewing", "K", "Ancient", 3183449780, 2279588369, 0.085, 0.085, 0.085, 2669997196, -0.0001, -1, -0.1, 1, 0, 0, 0, 0.8625, -0.5061, 0, 0.5061, 0.8625 },
+		{ "IceShard", "Ice Shard", "K", "Godly", 188539751, 188539820, 0.85, 0.85, 0.85, 1268710824, -0.0001, -0.0312, 1.071, 1, 0, 0, 0, -0.0842, 0.9965, 0, -0.9965, -0.0842 },
+		{ "IceDragon", "Ice Dragon", "K", "Godly", 165708869, 165708903, 0.5, 0.5, 0.5, 585846454, -0.0001, -0.1514, 1.2029, 1, 0, 0, 0, 0.0802, 0.9968, 0, -0.9968, 0.0802 },
+		{ "HeatChroma", "Heat · HeatChroma", "K", "Godly", 105333894, 3171194706, 0.3, 0.3, 0.3, 3187444849, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Heat", "Heat · Heat", "K", "Godly", 105333894, 105334003, 0.3, 0.3, 0.3, 3187444758, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Handsaw", "Handsaw", "K", "Godly", 54430772, 54430066, 0.4, 0.6, 0.53, 332042435, 0.0031, 0.0461, -0.803, -1, -0.0004, 0.0029, 0.0029, -0.0614, 0.9981, -0.0002, 0.9981, 0.0614 },
+		{ "HallowsBlade", "Hallow's Blade", "K", "Godly", 179155055, 1132750758, 0.55, 0.55, 0.555, 1132775323, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyGunBronze", "Bronze Swirly", "G", "Unique", 8310911339, 113787938041112, 1, 1, 1, 9552063524, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingermint_KChroma", "Cookiecane", "K", "Godly", 11837984324, 11837984504, 0.0687, 0.0687, 0.0687, 11979596437, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GingerbladeChroma", "Gingerblade", "K", "Godly", 2248389833, 2248390749, 0.61, 0.61, 0.6095, 2672351679, -0.5814, 0.7932, -0.0418, 0.042, 0.6372, 0.7696, 0.0428, -0.7707, 0.6358, 0.9982, 0.0062, -0.0597 },
+		{ "GhostKnife", "Ghost", "K", "Classic", 64131019, 64131051, 3, 2, 2, 144268841, -0.0001, -0.0054, -0.6642, 1, 0, 0, 0, 0.0068, -1, 0, 1, 0.0068 },
+		{ "GemstoneChroma", "Gemstone · GemstoneChroma", "K", "Godly", 1626714161, 3183577898, 25, 25, 25, 3183657875, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gemstone", "Gemstone · Gemstone", "K", "Godly", 1626714161, 3183579677, 25, 25, 25, 3183657748, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frostsaber", "Frostsaber", "K", "Godly", 1192795322, 1192795941, 0.55, 0.55, 0.6, 1268934541, 0, -0.0706, 1.1513, 1, 0, 0, 0, -0.0286, 0.9996, 0, -0.9996, -0.0286 },
+		{ "Frostbite", "Frostbite", "K", "Godly", 4528435571, 4528435630, 1.1, 1.1, 1.1, 4528373246, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Flames", "Flames", "K", "Godly", 238314098, 238314124, 0.6, 0.8, 0.73, 585873746, 0, 0.0027, 1.1242, 1, 0, 0, 0, 0.0654, 0.9979, 0, -0.9979, 0.0654 },
+		{ "FangChroma", "Fang · FangChroma", "K", "Godly", 117500241, 0, 0.4, 0.4, 0.4, 3187397850, 0, -1, -0.1, 0.0872, 0, -0.9962, 0, 1, 0, 0.9962, 0, 0.0872 },
+		{ "Fang", "Fang · Fang", "K", "Godly", 117500241, 117500388, 0.4, 0.4, 0.4, 3187397768, 0, -1, -0.1, 0.0872, 0, -0.9962, 0, 1, 0, 0.9962, 0, 0.0872 },
+		{ "EternalCane", "Eternalcane", "K", "Godly", 3132923779, 4488374804, 0.95, 0.95, 0.95, 4488391411, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eternal4", "Eternal IV", "K", "Godly", 3132923779, 4999951444, 0.95, 0.95, 0.95, 4999958740, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eternal3", "Eternal III", "K", "Godly", 3132923779, 3279683257, 0.95, 0.95, 0.95, 3281170430, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eternal2", "Eternal II", "K", "Godly", 532155954, 2545251852, 0.5, 0.5, 0.5, 2545253030, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eternal", "Eternal", "K", "Godly", 532155954, 532156041, 0.45, 0.45, 0.45, 538706317, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyGunSilver", "Silver Swirly", "G", "Unique", 8310911339, 108720084988330, 1, 1, 1, 9552064240, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "DeathshardChroma", "Deathshard · DeathshardChroma", "K", "Godly", 62275962, 3167029738, 0.75, 0.75, 0.75, 3187397317, 0, -1, -0.1001, 0, 0, -1, 0, 1, 0, 1, 0, 0 },
+		{ "Deathshard", "Deathshard · Deathshard", "K", "Godly", 62275962, 192567360, 0.75, 0.75, 0.75, 3175017717, 0, -1, -0.1, 0, 0, -1, 0, 1, 0, 1, 0, 0 },
+		{ "Darksword", "Darksword", "K", "Godly", 15020899066, 15020899218, 0.08, 0.08, 0.08, 15080267070, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Clockwork", "Clockwork", "K", "Godly", 352571495, 352570357, 1.1, 1.6, 1.2, 360609441, 0.0002, 0.0291, 1.1578, 1, 0, 0, 0, -0.0018, 1, 0, -1, -0.0018 },
+		{ "Chill", "Chill", "K", "Godly", 105329941, 105978218, 0.5, 0.5, 0.5, 332022166, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandyCorn", "CandyCorn", "K", "Common", 121944778, 1311187229, 1, 1, 1, 1133337797, 0, -0.9885, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandleflameChroma", "Candleflame", "K", "Godly", 7791364860, 7791364988, 0.065, 0.065, 0.065, 7806149582, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BonebladeChroma", "Boneblade", "K", "Godly", 1857106669, 2516324337, 0.7, 0.7, 0.7, 2513597845, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BlueSeer", "Blue Seer", "K", "Godly", 156092238, 3184062977, 0.7, 0.91, 1, 3184139996, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BloodKnife", "Blood", "K", "Classic", 51682254, 51941734, 0.5, 0.5, 0.3, 144307188, 0, -0.0504, -0.3497, 1, 0, 0, 0, -0.0392, -0.9992, 0, 0.9992, -0.0392 },
+		{ "BattleAxe", "BattleAxe", "K", "Godly", 1084767698, 1084767901, 0.56, 0.56, 0.56, 1133237368, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Nightblade", "Nightblade", "K", "Godly", 103838505, 103838996, 0.7, 0.45, 0.5, 475478854, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "OrangeSeer", "Orange Seer", "K", "Godly", 156092238, 7443788709, 0.7, 0.91, 1, 3184139504, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Peppermint", "Peppermint", "K", "Godly", 6085025295, 6074789360, 0.07, 0.07, 0.07, 6076067750, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Phantom2022", "Phantom 2022", "K", "Godly", 121944778, 95338306077286, 1, 1, 1, 11229732037, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pixel", "Pixel", "K", "Godly", 361629844, 361630114, 3, 3, 3, 365347166, 0, -0.1546, 0.9239, 1, 0, 0, 0, 0, 1, 0, -1, 0 },
+		{ "Prismatic", "Prismatic", "K", "Godly", 5355753728, 5355747943, 0.06, 0.0692, 0.06, 5360359935, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pumpking", "Pumpking", "K", "Godly", 94840342, 1133078553, 0.4, 0.4, 0.4, 1133082421, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "PurpleSeer", "Purple Seer", "K", "Godly", 156092238, 3184063317, 0.7, 0.91, 1, 3184140119, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RedSeer", "Red Seer", "K", "Godly", 156092238, 3184063443, 0.7, 0.91, 1, 3184139367, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Saw", "Saw · Saw", "K", "Godly", 168119698, 168119736, 0.5, 0.5, 0.55, 3187397991, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "YellowSeer", "Yellow Seer", "K", "Godly", 156092238, 7443776855, 0.7, 0.91, 1, 3184139648, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Xmas", "Xmas", "K", "Godly", 187852667, 187852629, 0.6, 0.6, 0.6, 332077449, -0.0001, -0.124, 1.1068, 1, 0, 0, 0, 0, 1, 0, -1, 0 },
+		{ "WintersEdge", "Winter's Edge", "K", "Godly", 93108071, 93112631, 0.45, 0.45, 0.45, 1268708987, 0, -1, -0.1, 0, 0, -1, 0, 1, 0, 1, 0, 0 },
+		{ "Virtual", "Virtual", "K", "Godly", 130101214, 386250868, 0.6, 0.6, 0.7, 386276987, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Turkey2023", "Turkey", "K", "Godly", 15320557481, 86999625612475, 0.056, 0.056, 0.056, 15413162319, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wrapped_K_2018", "Wrapped 2018", "K", "Common", 121944778, 2672196316, 1, 1, 1, 2669640357, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "AduriteGun", "Adurite", "G", "Uncommon", 79401392, 162812733, 1.5, 1.5, 1.5, 175668921, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "TimeKnife", "Prince", "K", "Classic", 70990583, 70990591, 0.5, 0.8, 0.5, 143917700, -0.0386, 0.0062, -0.9927, -0.0967, -0.0823, 0.9919, 0.9951, -0.0262, 0.0949, 0.0182, 0.9963, 0.0844 },
+		{ "TidesChroma", "Tides · TidesChroma", "K", "Godly", 238314382, 3171168641, 0.7, 0.9, 0.7, 3187398906, 0, -0.2257, 1.0324, 1, 0.0025, 0, 0, -0.0191, 0.9998, 0.0025, -0.9998, -0.0191 },
+		{ "Tides", "Tides · Tides", "K", "Godly", 238314382, 238314431, 0.7, 0.9, 0.7, 3187398809, 0, -0.226, 1.032, 1, 0, 0, 0, 0.048, 0.9988, 0, -0.9988, 0.048 },
+		{ "TheSeer", "Seer · TheSeer", "K", "Godly", 156092238, 156092253, 0.7, 0.91, 1, 3184139765, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Spider", "Spider", "K", "Godly", 302165984, 315122091, 0.55, 0.57, 0.52, 315120760, 0, -0.15, 0.973, 1, 0, 0, 0, 0, 1, 0, -1, 0 },
+		{ "Snowflake", "Snowflake", "K", "Godly", 582120569, 582120836, 0.6, 0.6, 0.6, 1268932977, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SlasherChroma", "Slasher · SlasherChroma", "K", "Godly", 283709822, 3171107559, 0.45, 0.45, 0.45, 3187398385, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Slasher", "Slasher · Slasher", "K", "Godly", 283709822, 313894904, 0.45, 0.45, 0.45, 3187398274, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ShadowKnife", "Shadow", "K", "Classic", 86297695, 86290910, 0.4, 0.2, 0.2, 144070096, 0, -0.0087, -0.703, 0.0033, 0, 1, 1, 0.0049, -0.0033, -0.0049, 1, 0 },
+		{ "SeerChroma", "Seer · SeerChroma", "K", "Godly", 156092238, 3184059718, 1, 1, 1, 3184140321, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Scythe", "Batwing", "K", "Ancient", 305826272, 2511673515, 1, 1, 1, 375690925, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "AuroraKnife", "Australis", "K", "Godly", 16025287191, 97521579968070, 0.0753, 0.0753, 0.0753, 101343256002049, 0, -1.1615, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BattleAxe2", "BattleAxe II", "K", "Godly", 2397016406, 2521633652, 0.7357, 0.7357, 0.7357, 2513535503, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bioblade", "Bioblade", "K", "Godly", 4662600017, 4751538400, 0.0624, 0.0684, 0.066, 4751540097, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IcepiercerSilver", "Silver Icepiercer", "G", "Unique", 11868991644, 122077395445706, 0.0548, 0.0548, 0.0548, 12226843957, 0, -0.66, 0.2344, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Constellation_G_2024", "Nightsky", "G", "Legendary", 6600918074, 140562006976774, 0.0384, 0.0388, 0.0369, 94311965719769, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cookieblade", "Cookieblade", "K", "Godly", 6123168377, 6123168583, 1, 1, 1, 6121574620, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Eggblade", "Eggblade", "K", "Godly", 6596834762, 6596824396, 0.0686, 0.0686, 0.0686, 6607512359, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ElderwoodScythe", "Elderwood Scythe", "K", "Ancient", 4217523241, 4210044808, 0.0764, 0.0764, 0.0764, 4468593654, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "FlowerwoodKnife", "Flowerwood", "K", "Godly", 16883629972, 16895441338, 0.0792, 0.0792, 0.0792, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ghostblade", "Ghostblade", "K", "Godly", 4217554208, 4210531490, 0.0535, 0.0535, 0.0535, 4217586790, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hallowscythe", "Hallowscythe", "K", "Ancient", 5841877975, 5841879647, 0.0708, 0.0708, 0.0708, 5877016863, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Heartblade", "Heartblade", "K", "Godly", 6404140078, 6413074818, 1.1003, 1.1003, 1.1003, 6413214382, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sugar", "Sugar", "G", "Godly", 101086719, 72286618177616, 0.5, 0.5, 0.5, 3215356000, -0.1, 0.536, 1.079, -1, 0, 0, 0, -1, 0, 0, 0, 1 },
+		{ "Iceflake", "Iceflake", "K", "Godly", 8231045240, 8231046270, 0.0675, 0.0675, 0.0675, 8304818186, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Logchopper", "Logchopper", "K", "Ancient", 4535643726, 4535641077, 1, 1, 1, 4528268775, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Nebula", "Nebula", "K", "Godly", 6596839942, 6256756879, 1.1522, 1.1522, 1.1522, 6598123521, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pearl_K", "Pearl", "K", "Godly", 18276861801, 74986100175804, 0.0697, 0.0697, 0.0697, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Plasmablade", "Plasmablade", "K", "Godly", 9702732853, 10015130416, 0.0018, 0.0016, 0.0017, 10014680882, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Rainbow_K", "Rainbow (Godly)", "K", "Godly", 12921240966, 12921241867, 0.0652, 0.0652, 0.0652, 12966184630, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sakura_K", "Sakura", "K", "Godly", 12307707430, 12307707797, 0.0741, 0.0741, 0.0741, 12339366064, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyAxe", "Swirly Axe", "K", "Ancient", 8293463844, 8293464070, 0.0579, 0.0579, 0.0579, 8304801000, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyBlade", "Swirly Blade", "K", "Godly", 8302964090, 8302965681, 0.0669, 0.0669, 0.0669, 8304805693, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VampiresEdge", "Vampire's Edge", "K", "Godly", 5841895234, 5842343736, 0.067, 0.067, 0.067, 5873256998, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammer", "Icecrusher (Rare)", "K", "Rare", 957726558, 11850788417, 1, 1, 1, 11855360152, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyAxeSilver", "Silver Swirly", "K", "Unique", 8293463844, 137014121340838, 0.0579, 0.0579, 0.0579, 9552051805, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Waves_K", "Waves", "K", "Godly", 13916938702, 13916939964, 0.0792, 0.0792, 0.0793, 13933066522, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "WraithKnife", "Spirit", "K", "Godly", 112444333460928, 131787177447081, 0.1047, 0.1047, 0.1047, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wrapped_G_2024", "Wrapped 2024", "G", "Uncommon", 6600918074, 137311445183389, 0.0384, 0.0388, 0.0369, 109929760056853, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ZombieBat", "Bat", "K", "Godly", 11182796403, 11192090515, 0.0741, 0.0741, 0.0741, 11229814357, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Wrapped_K_2022", "Wrapped 2022", "K", "Common", 121944778, 331744478, 1, 1, 1, 11834403282, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Amerilaser", "Amerilaser", "G", "Godly", 116657254, 445884341, 0.7, 0.7, 0.7, 446050753, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BaubleChroma", "Bauble", "G", "Godly", 107813118898769, 109913147403488, 0.0471, 0.0471, 0.0471, 137938731902685, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Blaster", "Blaster", "G", "Godly", 92656610, 90586029262535, 0.4, 0.45, 0.5, 386277381, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Blossom_G", "Blossom", "G", "Godly", 12322809632, 12322809917, 0.0476, 0.0441, 0.0438, 12339377105, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ChromaDarkbringer", "Darkbringer", "G", "Godly", 4730813852, 4728494788, 0.039, 0.039, 0.039, 4751507011, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ChromaLightbringer", "Lightbringer", "G", "Godly", 4730813852, 4728487789, 0.039, 0.039, 0.039, 4751507078, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ConstellationChroma", "Constellation · ConstellationChroma", "G", "Godly", 124598402927958, 123603327635244, 0.1012, 0.1012, 0.1012, 98517109155878, 0, -0.27, 0.727, 1, 0, 0, 0, 0.9999, 0.0125, 0, -0.0125, 0.9999 },
+		{ "Darkshot", "Darkshot", "G", "Godly", 15027451531, 15027451643, 0.04, 0.04, 0.04, 15080280688, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Disint", "Laser (Classic)", "G", "Classic", 18265627, 18265614, 1, 1, 1, 54798135, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GingerLuger", "Ginger Luger", "G", "Godly", 95356090, 2674981863, 1.8, 1.8, 1.8, 2674983099, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingermint_G", "Gingermint", "G", "Godly", 11866444071, 11866444253, 0.0461, 0.0461, 0.0461, 11872179646, 0, -0.3283, 0.7857, 1, 0, 0, 0, 0.9997, 0.0246, 0, -0.0246, 0.9997 },
+		{ "GreenLuger", "Green Luger", "G", "Godly", 95356090, 126534866, 1.8, 1.8, 1.8, 332044679, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Laser", "Laser · Laser", "G", "Godly", 130099641, 161254231, 0.5, 0.5, 0.5, 3187422496, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "LaserChroma", "Laser · LaserChroma", "G", "Godly", 130099641, 0, 0.5, 0.5, 0.5, 3187422628, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "LugerChroma", "Luger", "G", "Godly", 95356090, 0, 1.8, 1.8, 1.8, 3187399258, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Lugercane", "Lugercane", "G", "Godly", 95356090, 4535479829, 1.8, 1.8, 1.8, 4535482609, 0, -0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ocean_G", "Ocean", "G", "Godly", 13928587755, 90484783616182, 0.0787, 0.0431, 0.0468, 13933165014, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Phaser", "Phaser", "G", "Classic", 69486593, 69486519, 0.8, 0.8, 0.8, 144325423, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Plasmabeam", "Plasmabeam", "G", "Godly", 9702755186, 10015208201, 0.0424, 0.0463, 0.0439, 10014717343, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Shark", "Shark · Shark", "G", "Godly", 118269783, 203858007, 0.3, 0.43, 0.4, 3187421705, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "SharkChroma", "Shark · SharkChroma", "G", "Godly", 118269783, 3171214838, 0.44, 0.44, 0.44, 3187421856, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Chick_K_2025", "Chick", "K", "Common", 121944778, 116056287470892, 1, 1, 1, 116361515042274, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyGunChroma", "Swirly Gun · SwirlyGunChroma", "G", "Godly", 8310911339, 8293539377, 1, 1, 1, 8311453396, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "TravelerGunChroma", "Traveler's Gun", "G", "Godly", 15090814396, 132537117087610, 0.0499, 0.0499, 0.0499, 15097920149, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "VampireAxe_Gold", "Vampire's Axe · VampireAxe_Gold", "K", "Unique", 92263601594064, 132843202397207, 0.0725, 0.0725, 0.0725, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VampireGunChroma", "Vampire's Gun · VampireGunChroma", "G", "Godly", 126591885289479, 104946799389637, 0.05, 0.05, 0.05, 0, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "WatergunChroma", "Watergun", "G", "Godly", 18280999342, 129036269962882, 0.0395, 0.0395, 0.0395, 18351465514, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "AuroraGun", "Borealis", "G", "Godly", 16070198638, 107873598804292, 0.0469, 0.0469, 0.0469, 108635848059846, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "SwirlyAxeBronze", "Bronze Swirly", "K", "Unique", 8293463844, 82459482426756, 0.0579, 0.0579, 0.0579, 9552050165, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyGunBlue", "Blue Swirly", "G", "Unique", 8310911339, 104958144059634, 1, 1, 1, 9552060741, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "FlowerwoodGun", "Flowerwood Gun", "G", "Godly", 16895099893, 16895448237, 0.0519, 0.0519, 0.0519, 0, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Decorated_K_2025", "Decorated", "K", "Uncommon", 121944778, 136070215876929, 1, 1, 1, 124860763249593, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hallowgun", "Hallowgun", "G", "Godly", 5841866437, 5841868338, 0.0408, 0.0408, 0.0408, 5877089721, -0.6954, -0.2885, -0.036, -0.0467, 0.056, -0.9973, 0, 0.9984, 0.056, 0.9989, 0.0026, -0.0466 },
+		{ "IceHammer_Godly", "Icecrusher (Godly)", "K", "Godly", 11855737283, 11855737599, 0.07, 0.07, 0.07, 11855282546, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Icebeam", "Icebeam", "G", "Godly", 8310908064, 8231066536, 1, 1, 1.0002, 8305000161, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SwirlyAxeGold", "Gold Swirly", "K", "Unique", 8293463844, 76537714037540, 0.0579, 0.0579, 0.0579, 9552054920, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Turtle_K_2024", "Turtle", "K", "Uncommon", 6600901997, 127394910308086, 1, 1, 1, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Jinglegun", "Jinglegun", "G", "Godly", 6125843704, 6125843755, 1, 1, 1, 6121678262, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Makeshift", "Makeshift", "G", "Godly", 11158364935, 11274360089, 0.0546, 0.0546, 0.0546, 11229837140, -0.0028, -0.4133, 0.7372, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Celestial", "Celestial", "K", "Ancient", 109711282082830, 117556526686597, 0.0533, 0.0533, 0.0533, 136673966529736, 0, 0.0018, 0.2811, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Pearl_G", "Pearlshine", "G", "Godly", 18280804203, 136668364239627, 0.0431, 0.0431, 0.0431, 0, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Rainbow_G", "Rainbow Gun", "G", "Godly", 12921221200, 12921231088, 0.0519, 0.0519, 0.0519, 12966354606, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Spectre2022", "Spectre", "G", "Godly", 11165536294, 11165715120, 0.052, 0.052, 0.052, 11229779932, -0.0011, -0.5, 0.6295, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Stickers_X_G_2024", "Stickers 2024 · Stickers_X_G_2024", "G", "Common", 6600918074, 139997450438464, 0.0384, 0.0388, 0.0369, 91224254479440, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SwirlyGun", "Swirly Gun · SwirlyGun", "G", "Godly", 8310911339, 97363489382281, 1, 1, 1, 8305002569, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "VampireAxe_Purple", "Vampire's Axe · VampireAxe_Purple", "K", "Unique", 92263601594064, 125726996015099, 0.0725, 0.0725, 0.0725, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VampireGun", "Vampire's Gun · VampireGun", "G", "Godly", 126591885289479, 105399657891158, 0.0483, 0.0483, 0.0483, 0, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "WraithGun", "Soul", "G", "Godly", 79527507796407, 80102752403085, 0.0444, 0.0444, 0.0444, 0, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Infected", "Infected", "K", "Common", 121944778, 6978645136, 1, 1, 1, 200953094, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Forest_G_2024", "Forest", "G", "Uncommon", 79401392, 114741314080418, 1.6, 1.6, 1.6, 78199422065424, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Patrick", "Patrick", "K", "Common", 121944778, 7837986943, 1, 1, 1, 383476085, 0, -0.9885, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Dartbringer", "Dartbringer", "G", "Unique", 6689725889, 6689727175, 0.4426, 0.4258, 0.4258, 8626617523, 0.0352, -0.3793, 0.465, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SlouseClown", "Clown", "K", "Unique", 121944778, 197196512, 1, 1, 1, 315501118, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cane_G_2021", "Cane 2021", "G", "Common", 79401392, 8275031710, 1.5, 1.5, 1.5, 8304768700, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SharkSeeker", "SharkSeeker", "G", "Unique", 6967743598, 6689657395, 0.75, 0.75, 0.75, 6967771328, 0.1, -0.1, -0.5, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Iceblaster", "Iceblaster", "G", "Godly", 6125828567, 6120563948, 1, 1, 1, 6121579464, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "TravelerAxe", "Traveler's Axe", "K", "Ancient", 15057341638, 15057460725, 0.0681, 0.0681, 0.0681, 15070870271, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hallow", "Hallow's Edge", "K", "Godly", 179155055, 179155105, 0.57, 0.57, 0.57, 531878205, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RaygunSilver", "Silver Raygun", "G", "Unique", 115447220952926, 133327506424645, 0.0471, 0.0471, 0.0471, 71511736314707, 0.0009, -0.554, 0.7423, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "AmericaSword", "Old Glory", "K", "Godly", 262027449, 445805934, 0.6, 0.6, 0.6, 446047742, 0, 0.25, 1.9, 1, 0, 0, 0, 0.0767, 0.9971, 0, -0.9971, 0.0767 },
+		{ "VampireAxe_Bronze", "Vampire's Axe · VampireAxe_Bronze", "K", "Unique", 92263601594064, 117917193798694, 0.0725, 0.0725, 0.0725, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tree", "Tree", "K", "Legendary", 121944778, 5838589224, 1, 1, 1, 331745577, 0, -1.0285, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Tree_K_2023", "Tree 2023", "K", "Rare", 957726558, 121944805, 1, 1, 1, 15635563249, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowy", "Snowy", "K", "Uncommon", 121944778, 5538538671, 1, 1, 1, 332011125, 0, -0.9885, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "EliteGreen", "Green Elite", "K", "Legendary", 121944778, 137946316996767, 1, 1, 1, 332754554, 0, -1.0285, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Apoc_K_2022", "Apocalypse", "K", "Common", 121944778, 11218500706, 1, 1, 1, 11254172968, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Alex", "Alex", "K", "Common", 121944778, 545604317, 1, 1, 1, 546159020, 0, -0.9885, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Combat2", "Combat II", "K", "Common", 121944778, 6932358967, 1, 1, 1, 4972196241, 0.0416, -1.1409, 0.0773, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BronzeVampiresEdge", "Bronze Vamp's Edge", "K", "Unique", 5841895234, 124129066234254, 0.067, 0.067, 0.067, 12253493272, 0, -1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BlueVampiresEdge", "Blue Vamp's Edge", "K", "Unique", 5841895234, 116887066557099, 0.067, 0.067, 0.067, 12253491988, 0, -1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GoldVampiresEdge", "Gold Vamp's Edge", "K", "Unique", 5841895234, 89466623295527, 0.067, 0.067, 0.067, 12253496571, 0, -1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SilverVampiresEdge", "Silver Vamp's Edge", "K", "Unique", 5841895234, 93427229045342, 0.067, 0.067, 0.067, 12253494893, 0, -1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Flora", "Flora", "G", "Godly", 108253816085047, 116621225933096, 0.0457, 0.0457, 0.0457, 139276091458016, 0, -0.5, 0.5, 0.9999, -0.0087, -0.0087, 0.0087, 1, 0, 0.0087, -0.0001, 1 },
+		{ "Bloom", "Bloom", "K", "Godly", 73266355643345, 103489229144925, 0.079, 0.079, 0.079, 132419834610569, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bunnies_K_2025", "Bunnies", "K", "Legendary", 121944778, 104875261384354, 1, 1, 1, 90549252812333, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Carrots_K_2025", "Carrots", "K", "Common", 121944778, 137285542474252, 1, 1, 1, 76914260444878, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Potion", "Potion", "K", "Uncommon", 121944778, 1782402938, 1, 1, 1, 1133366632, 0, -0.9885, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Reaver_Legendary", "Reaver (Legendary)", "K", "Legendary", 121944778, 121291446597917, 1, 1, 1, 7791485669, 0, -1.0087, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Igloo_G_2024", "Igloo", "G", "Common", 79401392, 73071132008000, 1.6, 1.6, 1.6, 95517099886712, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Reaver", "Reaver (Rare)", "K", "Rare", 121944778, 118176521118205, 1, 1, 1, 7791484774, 0, -1.0087, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammer_Legendary", "Icecrusher (Legendary)", "K", "Legendary", 957726558, 11851776706, 1, 1, 1, 11855361567, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Icebreaker", "Icebreaker", "K", "Ancient", 6124173614, 6124173821, 0.9685, 0.9685, 0.9685, 6121572723, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VampireAxe", "Vampire's Axe (Ancient)", "K", "Ancient", 92263601594064, 73008954478338, 0.0725, 0.0725, 0.0725, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SwirlyGunGold", "Gold Swirly", "G", "Unique", 8310911339, 122072784662988, 1, 1, 1, 9552065167, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Minty", "Minty", "G", "Godly", 4528424409, 4528424475, 1.119, 1.119, 1.119, 4528291487, -0.0211, 0.2222, 0.772, -0.9998, 0, -0.0211, 0.0016, -0.9972, -0.075, -0.021, -0.075, 0.997 },
+		{ "BlueHarvester", "Blue Harvester", "G", "Unique", 7775027413, 8266618476, 0.06, 0.05, 0.05, 8194219645, 0, -0.54, 0.4558, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ElderwoodGun", "Elderwood Revolver", "G", "Godly", 4210029922, 4210038158, 0.0298, 0.0298, 0.0298, 4468571736, -0.5676, -0.1243, -0.0424, -0.0003, 0.023, -0.9997, -0.0117, 0.9997, 0.023, 0.9999, 0.0117, 0 },
+		{ "Candy", "Candy", "K", "Godly", 19040337, 19040326, 1.1, 1.4, 1.1, 332021011, 0, 0.866, -0.006, 0, 0, 1, 0, -1, 0, 1, 0, 0 },
+		{ "ElderwoodGunSilver", "Silver Elderwood", "G", "Unique", 4210029922, 5357372620, 0.0407, 0.0456, 0.0406, 4468583758, -0.6706, -0.1995, -0.0658, 0.0161, 0.0001, -0.9999, 0.0208, 0.9998, 0.0005, 0.9997, -0.0208, 0.0161 },
+		{ "ElderwoodKnifeBlue", "Blue Elderwood", "K", "Unique", 11238166013, 14741388867, 0.07, 0.07, 0.07, 11505913287, 0, -1.347, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SilverHallow", "Silver Hallow", "K", "Unique", 179155055, 104150976879041, 0.5, 0.5, 0.5, 2511341094, 0, -1.3549, 0.0348, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SilverIceblaster", "Silver Iceblaster", "G", "Unique", 6125828567, 6246950589, 1, 1, 1, 6404166698, -0.0085, -0.7, -0.546, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "SilverIcebreaker", "Silver Icebreaker", "K", "Unique", 6124173614, 6237992602, 1, 1, 1, 6404126280, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SilverHarvester", "Silver Harvester", "G", "Unique", 7775027413, 8266615645, 0.06, 0.05, 0.05, 8194217388, 0, -0.51, 0.4458, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BlueSugar", "Blue Sugar", "G", "Unique", 101086719, 3241860913, 0.6, 0.6, 0.6, 3215355152, -0.1, 0.5361, 1.0789, -1, 0, 0, 0, -1, 0, 0, 0, 1 },
+		{ "LogchopperSilver", "Silver Logchopper", "K", "Unique", 4535643726, 9346155546, 1, 1, 1, 4753352581, -0.0051, -0.7237, 0.328, 0.9962, -0.0316, -0.0816, 0.0342, 0.9989, 0.031, 0.0806, -0.0336, 0.9962 },
+		{ "MintySilver", "Silver Minty", "G", "Unique", 5216810177, 4753313914, 1.15, 1.15, 1.15, 4753346087, 0.0545, -0.2787, 0.5806, 0.9959, -0.0334, 0.0839, 0.0337, 0.9994, -0.0026, -0.0838, 0.0054, 0.9965 },
+		{ "SilverCandy", "Silver Candy", "K", "Unique", 19040337, 97784569465604, 1, 1.3333, 1, 1520190188, 0, 0.866, -0.006, 0, 0, 1, 0, -1, 0, 1, 0, 0 },
+		{ "ElderwoodGunBlue", "Blue Elderwood", "G", "Unique", 4210029922, 5827160585, 0.0407, 0.0456, 0.0406, 4468574885, -0.6706, -0.1995, -0.0658, 0.0161, 0.0001, -0.9999, 0.0208, 0.9998, 0.0005, 0.9997, -0.0208, 0.0161 },
+		{ "ElderwoodGunBronze", "Bronze Elderwood", "G", "Unique", 4210029922, 5355144249, 0.0407, 0.0456, 0.0406, 4468585407, -0.6706, -0.1995, -0.0658, 0.0161, 0.0001, -0.9999, 0.0208, 0.9998, 0.0005, 0.9997, -0.0208, 0.0161 },
+		{ "ElderwoodGunGold", "Gold Elderwood", "G", "Unique", 4210029922, 126940459873407, 0.0407, 0.0456, 0.0406, 4468584345, -0.6706, -0.1995, -0.0658, 0.0161, 0.0001, -0.9999, 0.0208, 0.9998, 0.0005, 0.9997, -0.0208, 0.0161 },
+		{ "ElderwoodKnifeBronze", "Bronze Elderwood", "K", "Unique", 11238166013, 14741383535, 0.07, 0.07, 0.07, 11505914752, 0, -1.347, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ElderwoodKnifeGold", "Gold Elderwood", "K", "Unique", 11238166013, 14741358103, 0.07, 0.07, 0.07, 11505917850, 0, -1.347, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "ElderwoodKnifeSilver", "Silver Elderwood", "K", "Unique", 11238166013, 14741374486, 0.07, 0.07, 0.07, 11505916486, 0, -1.3468, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BronzeHallow", "Bronze Hallow", "K", "Unique", 179155055, 2518167440, 0.5, 0.5, 0.5, 2511342846, 0, -1.3549, 0.0348, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GoldHallow", "Gold Hallow", "K", "Unique", 179155055, 110453608575133, 0.5, 0.5, 0.5, 2511340308, 0, -1.3549, 0.0348, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RedHallow", "Red Hallow", "K", "Unique", 179155055, 73958132414440, 0.5, 0.5, 0.5, 2511343130, 0, -1.3549, 0.0348, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RaygunBronze", "Bronze Raygun", "G", "Unique", 115447220952926, 122251377901095, 0.0471, 0.0471, 0.0471, 138881346504998, 0.0009, -0.554, 0.7423, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RaygunRed", "Red Raygun", "G", "Unique", 115447220952926, 104160895526874, 0.0471, 0.0471, 0.0471, 132354489228618, 0.0009, -0.554, 0.7423, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BronzeIceblaster", "Bronze Iceblaster", "G", "Unique", 6125828567, 6246948951, 1, 1, 1, 6404167442, -0.0085, -0.7, -0.546, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "GoldIceblaster", "Gold Iceblaster", "G", "Unique", 6125828567, 6246949956, 1, 1, 1, 6404165933, -0.0085, -0.7, -0.546, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "RedIceblaster", "Red Iceblaster", "G", "Unique", 6125828567, 6246951385, 1, 1, 1, 6404168049, -0.0085, -0.7, -0.546, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "BronzeIcebreaker", "Bronze Icebreaker", "K", "Unique", 6124173614, 6237991982, 1, 1, 1, 6404127119, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GoldIcebreaker", "Gold Icebreaker", "K", "Unique", 6124173614, 6237993632, 1, 1, 1, 6404115112, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RedIcebreaker", "Red Icebreaker", "K", "Unique", 6124173614, 6237994207, 1, 1, 1, 6404129111, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BronzeHarvester", "Bronze Harvester", "G", "Unique", 7775027413, 8266617019, 0.06, 0.05, 0.05, 8194221072, 0, -0.52, 0.4158, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "GoldHarvester", "Gold Harvester", "G", "Unique", 7775027413, 8266613473, 0.06, 0.05, 0.05, 8194222523, 0, -0.52, 0.4258, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Harvester", "Harvester", "G", "Ancient", 7775027413, 7775245551, 0.06, 0.05, 0.05, 7800847534, 0, -0.5366, 0.4983, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SilverSugar", "Silver Sugar", "G", "Unique", 101086719, 80417567706028, 0.6, 0.6, 0.6, 3215355602, -0.1, 0.5361, 1.0789, -1, 0, 0, 0, -1, 0, 0, 0, 1 },
+		{ "GoldSugar", "Gold Sugar", "G", "Unique", 101086719, 77907977694388, 0.6, 0.6, 0.6, 3215355797, -0.1, 0.5361, 1.0789, -1, 0, 0, 0, -1, 0, 0, 0, 1 },
+		{ "BronzeSugar", "Bronze Sugar", "G", "Unique", 101086719, 6958436959, 0.6, 0.6, 0.6, 3215355397, -0.1, 0.5361, 1.0789, -1, 0, 0, 0, -1, 0, 0, 0, 1 },
+		{ "LogchopperBlue", "Blue Logchopper", "K", "Unique", 4535643726, 4753303501, 1, 1, 1, 4753353471, 0, -0.9536, 0.3372, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "LogchopperBronze", "Bronze Logchopper", "K", "Unique", 4535643726, 7572081485, 0.96, 0.96, 0.96, 4753354123, 0, -0.9536, 0.3372, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "LogchopperGold", "Gold Logchopper", "K", "Unique", 4535643726, 108331174915822, 0.96, 0.96, 0.96, 4753354638, 0, -0.9536, 0.3372, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "MintyBronze", "Bronze Minty", "G", "Unique", 5216810177, 5211061190, 1.15, 1.15, 1.15, 4753348263, 0.0545, -0.2787, 0.5806, 0.9959, -0.0334, 0.0839, 0.0337, 0.9994, -0.0026, -0.0838, 0.0054, 0.9965 },
+		{ "BlueCandy", "Blue Candy", "K", "Unique", 19040337, 3241832047, 1, 1.3333, 1, 1489495701, 0, 0.866, -0.006, 0, 0, 1, 0, -1, 0, 1, 0, 0 },
+		{ "BronzeCandy", "Bronze Candy", "K", "Unique", 19040337, 122687610829006, 1, 1.3333, 1, 1520189487, 0, 0.866, -0.006, 0, 0, 1, 0, -1, 0, 1, 0, 0 },
+		{ "GoldCandy", "Gold Candy", "K", "Unique", 19040337, 2885942815, 1, 1.3333, 1, 1520188792, 0, 0.866, -0.006, 0, 0, 1, 0, -1, 0, 1, 0, 0 },
+		{ "Celestial_Silver", "Silver Celestial", "K", "Unique", 109711282082830, 119629165572031, 0.0533, 0.0533, 0.0533, 90241292303974, 0, 0.002, 0.281, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Constellation_Silver", "Silver Constellation", "G", "Unique", 124598402927958, 88000474566609, 0.1007, 0.1007, 0.1007, 100747436297625, 0, -0.27, 0.727, 1, 0, 0, 0, 0.9999, 0.0125, 0, -0.0125, 0.9999 },
+		{ "IcepiercerRed", "Red Icepiercer", "G", "Unique", 11868991644, 12196203001, 0.0548, 0.0548, 0.0548, 12227133450, 0, -0.66, 0.234, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Blue", "Blue Gingerscythe", "K", "Unique", 15397282571, 125204450826311, 0.0696, 0.0696, 0.0697, 0, 0, -0.94, -0.063, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "TravelerAxeSilver", "Silver Traveler's", "K", "Unique", 15057341638, 125312600693078, 0.0681, 0.0681, 0.0681, 15695407742, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "VampireAxe_Silver", "Vampire's Axe · VampireAxe_Silver", "K", "Unique", 92263601594064, 78665201678229, 0.0725, 0.0725, 0.0725, 0, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Celestial_Bronze", "Bronze Celestial", "K", "Unique", 109711282082830, 118098317574486, 0.0533, 0.0533, 0.0533, 119399643874968, 0, 0.002, 0.281, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Celestial_Gold", "Gold Celestial", "K", "Unique", 109711282082830, 74186573010586, 0.0533, 0.0533, 0.0533, 104229967982042, 0, 0.002, 0.281, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Celestial_Red", "Red Celestial", "K", "Unique", 109711282082830, 91261836086535, 0.0533, 0.0533, 0.0533, 119157529694972, 0, 0.002, 0.281, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Constellation_Bronze", "Bronze Constellation", "G", "Unique", 124598402927958, 84518828644661, 0.1007, 0.1007, 0.1007, 112811587103866, 0, -0.27, 0.727, 1, 0, 0, 0, 0.9999, 0.0125, 0, -0.0125, 0.9999 },
+		{ "Constellation_Gold", "Gold Constellation", "G", "Unique", 124598402927958, 129541547610095, 0.1007, 0.1007, 0.1007, 132975248521820, 0, -0.27, 0.727, 1, 0, 0, 0, 0.9999, 0.0125, 0, -0.0125, 0.9999 },
+		{ "Constellation_Red", "Red Constellation", "G", "Unique", 124598402927958, 97613309386908, 0.1007, 0.1007, 0.1007, 85766514163212, 0, -0.27, 0.727, 1, 0, 0, 0, 0.9999, 0.0125, 0, -0.0125, 0.9999 },
+		{ "Icepiercer", "Icepiercer", "G", "Ancient", 11868991644, 11869075814, 0.0548, 0.0548, 0.0548, 11874071041, 0, -0.5819, 0.0324, 1, 0, 0, 0, 0.9978, -0.0658, 0, 0.0658, 0.9978 },
+		{ "IcepiercerBronze", "Bronze Icepiercer", "G", "Unique", 11868991644, 136041212037383, 0.0548, 0.0548, 0.0548, 12226920195, 0, -0.66, 0.234, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IcepiercerGold", "Gold Icepiercer", "G", "Unique", 11868991644, 89221956008018, 0.0548, 0.0548, 0.0548, 12226688172, 0, -0.66, 0.234, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammerGold", "Gold Icecrusher", "K", "Unique", 11848711686, 132842079563749, 0.0736, 0.0736, 0.0736, 12227137860, 0, -0.8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Bronze", "Bronze Gingerscythe", "K", "Unique", 15397282571, 88640690300238, 0.0696, 0.0696, 0.0697, 0, 0, -0.94, -0.063, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammerBronze", "Bronze Icecrusher", "K", "Unique", 11848711686, 88591542566831, 0.0736, 0.0736, 0.0736, 12227148356, 0, -0.8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "TravelerAxeBronze", "Bronze Traveler's", "K", "Unique", 15057341638, 87152090639814, 0.0681, 0.0681, 0.0681, 15695407020, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "TravelerAxeGold", "Gold Traveler's", "K", "Unique", 15057341638, 107837737026552, 0.0681, 0.0681, 0.0681, 15695408631, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "TreeGun2023", "Evergun", "G", "Godly", 15408863676, 83856783954564, 0.023, 0.023, 0.023, 15694357721, 0.0363, -0.4269, 0.9423, 0.9995, 0, 0.0305, 0, 1, 0, -0.0305, 0, 0.9995 },
+		{ "TreeKnife2023", "Evergreen", "K", "Godly", 15408280573, 125133515152716, 0.0046, 0.0046, 0.0046, 15694357137, 0.0502, -1.7515, -0.0305, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscope", "Gingerscope", "G", "Ancient", 15374602183, 15409041564, 0.0842, 0.0842, 0.0842, 15666596216, 0, -0.4, 0.9, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscope_Blue", "Blue Gingerscope", "G", "Unique", 15374602183, 100142423147247, 0.0842, 0.0842, 0.0842, 0, 0, -0.42, 0.97, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscope_Bronze", "Bronze Gingerscope", "G", "Unique", 15374602183, 93684911189915, 0.0842, 0.0842, 0.0842, 0, 0, -0.42, 0.97, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscope_Gold", "Gold Gingerscope", "G", "Unique", 15374602183, 75888854860786, 0.0842, 0.0842, 0.0842, 0, 0, -0.42, 0.97, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscope_Silver", "Silver Gingerscope", "G", "Unique", 15374602183, 129527194826480, 0.0842, 0.0842, 0.0842, 0, 0, -0.42, 0.97, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SunsetGun", "Sunrise", "G", "Godly", 109742397574153, 71731808219690, 0.0458, 0.0458, 0.0458, 129480661108374, 0, -0.1086, 0.6442, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SunsetKnife", "Sunset", "K", "Godly", 137082284051764, 93782017269677, 0.074, 0.074, 0.074, 103526268515240, 0, -1.3352, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Synthwave", "Synthwave (Rare)", "K", "Rare", 6600901997, 139525295603551, 1, 1, 1, 84935740002917, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Synthwave_Ancient", "Synthwave (Ancient)", "K", "Ancient", 81344146777937, 84281380230931, 0.0741, 0.0741, 0.0741, 133828016595037, 0.0228, -0.64, 0.2496, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Synthwave_Godly", "Synthwave (Godly)", "K", "Godly", 132672824913652, 81048398253986, 0.0741, 0.0741, 0.0741, 116075729415230, -0.0142, -1.06, 0.0292, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Synthwave_Legendary", "Synthwave (Legendary)", "K", "Legendary", 6600901997, 115419740311345, 1, 1, 1, 132040985617451, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammerRed", "Red Icecrusher", "K", "Unique", 11848711686, 71714696554176, 0.0736, 0.0736, 0.0736, 12227186408, 0, -0.8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "IceHammerSilver", "Silver Icecrusher", "K", "Unique", 11848711686, 108890976731643, 0.0736, 0.0736, 0.0736, 12227142478, 0, -0.8, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Gold", "Gold Gingerscythe", "K", "Unique", 15397282571, 87952488946515, 0.0696, 0.0696, 0.0697, 0, 0, -1.1001, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerscythe_Silver", "Silver Gingerscythe", "K", "Unique", 15397282571, 110584978259893, 0.0696, 0.0696, 0.0697, 0, 0, -1.1001, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Raygun", "Raygun", "G", "Godly", 115447220952926, 127881437685243, 0.0471, 0.0471, 0.0471, 139431943195380, 0.0009, -0.554, 0.7423, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "UFOs_K_2025", "UFOs", "K", "Common", 6600901997, 101182606016909, 1, 1, 1, 97641024072972, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Xeno_K_2025", "Xeno", "K", "Rare", 6600901997, 101379516858862, 1, 1, 1, 80492487454400, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "HauntedHouse_K_2025", "Haunted 2025", "K", "Common", 6600901997, 96264372471629, 1, 1, 1, 90194465176219, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "PumpkinPatch_K_2025", "Pumpkin 2025", "K", "Uncommon", 6600901997, 92052630861897, 1, 1, 1, 119626042140839, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Bats_K_2025", "Cats", "K", "Common", 6600901997, 116130292497156, 1, 1, 1, 140366567839959, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Energized_G_2025", "Energized", "G", "Legendary", 79401392, 96975375477860, 1.6, 1.6, 1.6, 114403390530326, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Hologram_G_2025", "Hologram", "G", "Rare", 79401392, 130121703557220, 1.6, 1.6, 1.6, 108751717527377, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Treats_G_2025", "Treats", "G", "Uncommon", 79401392, 121735248301175, 1.6, 1.6, 1.6, 76537883908961, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "CandyCorn_G_2025", "Candy Corn 2025", "G", "Common", 79401392, 88054952272755, 1.6, 1.6, 1.6, 129781304866793, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Eyes_G_2025", "Eyes", "G", "Uncommon", 79401392, 81682248459741, 1.6, 1.6, 1.6, 90751163516480, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Abduction_K_2025", "Abduction", "K", "Uncommon", 6600901997, 125213231050513, 1, 1, 1, 107510647616718, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Treats_K_2025", "Treats", "K", "Uncommon", 6600901997, 117148660034316, 1, 1, 1, 115298865715727, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "StickersH_K_2025", "Stickers 2025 · StickersH_K_2025", "K", "Common", 6600901997, 91672438499477, 1, 1, 1, 100461386281007, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "CandyCorn_K_2025", "Candy Corn 2025", "K", "Common", 6600901997, 84607607123689, 1, 1, 1, 86405207895194, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Hologram_K_2025", "Hologram", "K", "Rare", 6600901997, 139678078674313, 1, 1, 1, 77773918675860, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Energized_K_2025", "Energized", "K", "Legendary", 6600901997, 104379655242590, 1, 1, 1, 86258299490709, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "UFOs_G_2025", "UFOs", "G", "Common", 79401392, 81729797666928, 1.6, 1.6, 1.6, 84030107970606, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Fall_G_2025", "Fall", "G", "Common", 79401392, 72560612536240, 1.6, 1.6, 1.6, 78153346812503, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Xeno_G_2025", "Xeno", "G", "Rare", 79401392, 88277879999522, 1.6, 1.6, 1.6, 139755862211442, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "HeartWand", "Heart Wand · HeartWand", "K", "Godly", 77738838473091, 76246633927299, 0.0782, 0.0782, 0.0782, 118334707962654, 0, -0.8, 0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "RaygunGold", "Gold Raygun", "G", "Unique", 115447220952926, 128241054560504, 0.0471, 0.0471, 0.0471, 76250851065456, 0.0009, -0.554, 0.7423, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Treat", "Treat", "G", "Godly", 135790480817772, 86649236464456, 0.0538, 0.0538, 0.0538, 131626924640663, 0, 0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "XenoGun", "Xenoshot", "G", "Godly", 96867436912658, 103568875118220, 0.0534, 0.0534, 0.0534, 96859273002742, 0.0253, -0.0153, 0.8973, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "XenoKnife", "Xenoknife", "K", "Godly", 136619680236977, 113651973865393, 0.0784, 0.0784, 0.0784, 115021756767182, 0, -1.2953, 0.0848, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "StickersT2025", "Stickers 2025 · StickersT2025", "K", "Common", 6600901997, 113144896198208, 1, 1, 1, 115280072896190, -0.0224, -1.0551, 0.0453, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BaubleKnife", "Ornament (Godly)", "K", "Godly", 116508096109443, 135843404105980, 0.0731, 0.0731, 0.0731, 111092946728824, 0, -1.15, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Blizzard", "Blizzard · Blizzard", "G", "Godly", 77235373292363, 131115493735176, 0.043, 0.043, 0.043, 88928894807422, 0, -0.57, 0.75, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "BlizzardChroma", "Blizzard · BlizzardChroma", "G", "Godly", 77235373292363, 97280881789656, 0.0433, 0.0433, 0.0433, 139495852635932, 0, -0.32, 0.34, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Frozen_G_2025", "Frozen 2025", "G", "Legendary", 79401392, 87079980851460, 1.5, 1.5, 1.5, 90622014285727, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Frozen_K_2025", "Frozen 2025", "K", "Legendary", 6600901997, 103391577880162, 1, 1, 1, 108996627787763, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingerbread_G_2025", "Gingerbread 2025", "G", "Uncommon", 79401392, 77398327971959, 1.5, 1.5, 1.5, 74908113882525, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingerbread_K_2025", "Gingerbread 2025", "K", "Uncommon", 6600901997, 86777384953188, 1, 1, 1, 134478959354477, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Gingercookie_G_2025", "Gingercookie", "G", "Rare", 79401392, 112196863510306, 1.5, 1.5, 1.5, 99160839686845, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Gingercookie_K_2025", "Gingercookie", "K", "Rare", 6600901997, 77551638357810, 1, 1, 1, 111408683823094, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Lights_G_2025", "Lights 2025", "G", "Common", 79401392, 80557940854587, 1.5, 1.5, 1.5, 104258636970738, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Lights_K_2025", "Lights 2025", "K", "Common", 6600901997, 71217678785248, 1, 1, 1, 71228862432065, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Ornaments_K_2025", "Ornaments 2025", "K", "Uncommon", 6600901997, 128273296066714, 1, 1, 1, 132504094164819, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Peppermint_G_2025", "Peppermint", "G", "Common", 79401392, 107986046289088, 1.5, 1.5, 1.5, 73148873488539, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Peppermint_K_2025", "Peppermint 2025", "K", "Common", 6600901997, 120181028268113, 1, 1, 1, 84605926178412, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SnowDagger", "Snow Dagger", "K", "Godly", 140633396635861, 77812964601215, 0.0598, 0.0598, 0.0598, 95328449981238, 0, -1.15, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowball_G_2025", "Snowball", "G", "Common", 79401392, 81738515769034, 1.5, 1.5, 1.5, 104416405402940, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Snowcannon", "Snowcannon", "G", "Godly", 99836890880541, 122392330922281, 0.05, 0.05, 0.05, 129186939023729, 0, -0.32, 0.34, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Snowstorm", "Snowstorm · Snowstorm", "K", "Godly", 127534150487935, 84853425379784, 0.077, 0.077, 0.077, 70973050894155, 0, -1.26, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SnowstormChroma", "Snowstorm · SnowstormChroma", "K", "Godly", 86944837615327, 86253759560362, 0.077, 0.077, 0.077, 94202294092932, 0, -1.18, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Spearmint_G_2025", "Spearmint", "G", "Rare", 79401392, 125101257679057, 1.5, 1.5, 1.5, 81352860339620, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Spearmint_K_2025", "Spearmint", "K", "Rare", 6600901997, 73372556711687, 1, 1, 1, 98506456649552, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "StickersX_G_2025", "Stickers 2025", "G", "Common", 79401392, 123572826899313, 1.5, 1.5, 1.5, 127489830827583, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "StickersX_K_2025", "Stickers 2025 · StickersX_K_2025", "K", "Common", 6600901997, 130231206599976, 1, 1, 1, 102283625659356, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sweater_G_2025", "Sweater 2025", "G", "Uncommon", 79401392, 83785504897240, 1.5, 1.5, 1.5, 118557229750245, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Sweater_K_2025", "Sweater 2025", "K", "Uncommon", 6600901997, 134310239127931, 1, 1, 1, 102130993592804, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Penguin_K_2025", "Penguin", "K", "Common", 6600901997, 72734484939175, 1, 1, 1, 93320180084418, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "SweetChroma", "Sweet · SweetChroma", "K", "Godly", 88250692342609, 120707737118924, 0.0691, 0.0691, 0.0691, 90923771881248, 0, -1, 0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Cupid_K_2026", "Cupid", "K", "Legendary", 121944778, 91124699102770, 1, 1, 1, 123955324398353, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Heartbreak_G_2026", "Heartbreak", "G", "Rare", 79401392, 102957418708034, 1.6, 1.6, 1.6, 79235438948261, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Paws_G_2026", "Paws", "G", "Uncommon", 79401392, 108504597564281, 1.6, 1.6, 1.6, 120089556380493, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Blossom_K_2026", "Blossom 2026", "K", "Uncommon", 121944778, 139596499078847, 1, 1, 1, 110160120309916, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Strawberries_G_2026", "Strawberries", "G", "Common", 79401392, 103202994163470, 1.6, 1.6, 1.6, 128646835922561, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Hearts_K_2026", "Hearts 2026", "K", "Common", 121944778, 112048035793774, 1, 1, 1, 99939659856909, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Plaid_G_2026", "Plaid", "G", "Common", 79401392, 100185145262613, 1.6, 1.6, 1.6, 121681210724670, 0, -0.7, -0.3, 1, 0, 0, 0, 0, -1, 0, 1, 0 },
+		{ "Starry_K_2026", "Starry 2026", "K", "Uncommon", 121944778, 98911990727243, 1, 1, 1, 130537925107449, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Strawberries_K_2026", "Strawberries", "K", "Common", 121944778, 75968382870233, 1, 1, 1, 73897192147749, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sweet_K_2026", "Yummy", "K", "Rare", 121944778, 139481558107907, 1, 1, 1, 113677688954146, 0, -1, -0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "HeartWandChroma", "Heart Wand · HeartWandChroma", "K", "Godly", 77738838473091, 78842905206144, 0.0782, 0.0782, 0.0782, 99154743764163, 0, -0.8, 0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+		{ "Sweet", "Sweet · Sweet", "K", "Godly", 88250692342609, 75844398224824, 0.0691, 0.0691, 0.0691, 126937716954396, 0, -1, 0.1, 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+	}
+
+	local RARITY = { Ancient = 1, Godly = 2, Unique = 3, Legendary = 4, Vintage = 5, Classic = 6, Rare = 7, Uncommon = 8, Common = 9 }
+	local RCOLOR = {
+		Ancient = Color3.fromRGB(255, 190, 70), Godly = Color3.fromRGB(255, 90, 200), Unique = Color3.fromRGB(255, 230, 110),
+		Legendary = Color3.fromRGB(255, 80, 80), Vintage = Color3.fromRGB(200, 170, 120), Classic = Color3.fromRGB(150, 210, 255),
+		Rare = Color3.fromRGB(90, 150, 255), Uncommon = Color3.fromRGB(110, 220, 120), Common = Color3.fromRGB(170, 170, 170),
+	}
+	local collection = {} -- { key, type, mesh, tex, scale = {x,y,z}, name, rarity, img, src }
 	local byKey = {}
-	pcall(function()
-		if isfile and isfile(SAVE_FILE) then
-			local d = HttpService:JSONDecode(readfile(SAVE_FILE))
-			for _, s in ipairs(d) do
-				if type(s) == "table" and s.key and s.mesh then
-					table.insert(collection, s)
-					byKey[s.key] = s
-				end
-			end
-		end
+	for _, e in ipairs(CATALOG) do
+		local s = {
+			key = e[1], name = e[2], type = e[3] == "K" and "Knife" or "Gun", rarity = e[4],
+			mesh = "rbxassetid://" .. e[5], tex = e[6] ~= 0 and ("rbxassetid://" .. e[6]) or "",
+			scale = { e[7], e[8], e[9] }, img = e[10], src = "tool", from = e[4],
+			-- Grip предмета: как он лежит в руке (у каждого скина свой)
+			grip = e[11] and CFrame.new(e[11], e[12], e[13], e[14], e[15], e[16], e[17], e[18], e[19], e[20], e[21], e[22]) or nil,
+		}
+		table.insert(collection, s)
+		byKey[s.key] = s
+	end
+	-- редкие сверху, внутри - по названию
+	table.sort(collection, function(a, b)
+		local ra, rb = RARITY[a.rarity] or 10, RARITY[b.rarity] or 10
+		if ra ~= rb then return ra < rb end
+		return a.name < b.name
 	end)
 
 	local saveAt
@@ -7535,7 +8817,7 @@ end)()
 		local a = applied[part]
 		if a and a.key == s.key and a.size == sk.size then
 			-- игра могла вернуть свой меш - ставим обратно
-			if a.mesh and a.mesh.MeshId ~= s.mesh then a.key = nil else
+			if a.mesh and not a.overlay and a.mesh.MeshId ~= s.mesh then a.key = nil else
 				if a.overlay then part.LocalTransparencyModifier = 1 end
 				return
 			end
@@ -7569,7 +8851,7 @@ end)()
 			a.overlay = p
 			part.LocalTransparencyModifier = 1
 			a.liveUsed = true
-		elseif a.mesh then
+		elseif a.mesh and not (kind == "tool" and s.grip) then
 			if a.overlay then
 				a.overlay:Destroy()
 				a.overlay = nil
@@ -7584,8 +8866,19 @@ end)()
 				pcall(function() part.Material = Enum.Material[s.mat] end)
 			end
 		else
-			-- MeshPart (меш не поменять): прячем его у себя и приваряем копию со скином
+			-- копия со скином поверх родного (он прячется у себя). в руке - с поправкой на Grip скина:
+			-- ручка = рука * Grip^-1, значит скин = ручка * GripРодной * GripСкина^-1
 			if a.overlay then a.overlay:Destroy() end
+			if a.mesh and a.orig then
+				a.mesh.MeshId = a.orig.MeshId
+				a.mesh.TextureId = a.orig.TextureId
+				a.mesh.Scale = a.orig.Scale
+			end
+			local off = CFrame.identity
+			local tool = part.Parent
+			if kind == "tool" and s.grip and tool and tool:IsA("Tool") then
+				off = tool.Grip * s.grip:Inverse()
+			end
 			local p = new("Part", {
 				Name = "PZ_Skin",
 				Size = Vector3.one * 0.2,
@@ -7595,7 +8888,7 @@ end)()
 				CanQuery = false,
 				Massless = true,
 				Anchored = false,
-				CFrame = part.CFrame,
+				CFrame = part.CFrame * off,
 				Parent = part,
 			})
 			new("SpecialMesh", { MeshType = Enum.MeshType.FileMesh, MeshId = s.mesh, TextureId = s.tex, Scale = targetScale(s, kind), Parent = p })
@@ -7621,22 +8914,7 @@ end)()
 				end
 			end
 		end
-		local wd = workspace:FindFirstChild("WeaponDisplays")
-		local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-		local function mine(d)
-			local o = ownerOf(d)
-			if o then return o == player end
-			-- крепление не нашли - свой, если висит прямо на нас
-			return myRoot ~= nil and (d.Position - myRoot.Position).Magnitude < 4
-		end
-		if wd then
-			for _, d in ipairs(wd:GetChildren()) do
-				if d:IsA("BasePart") and mine(d) then
-					local ty = d.Name:find("Knife") and "Knife" or (d.Name:find("Gun") and "Gun" or nil)
-					if ty then table.insert(list, { d, ty, false }) end
-				end
-			end
-		end
+		-- стенды на спине (WeaponDisplays) не трогаем: у каждого скина там свой поворот - раздувало и крутило
 		return list
 	end
 
@@ -7647,16 +8925,6 @@ end)()
 	local scanAt, harvestAt = 0, 0
 	bind(RunService.Heartbeat, function()
 		local now = os.clock()
-		if saveAt and now > saveAt then
-			saveAt = nil
-			pcall(function() if writefile then writefile(SAVE_FILE, HttpService:JSONEncode(collection)) end end)
-		end
-
-		-- собираем чужие скины раз в 2 секунды
-		if now - harvestAt > 2 then
-			harvestAt = now
-			pcall(scanServer)
-		end
 
 		-- своё оружие и стенды: надеть / вернуть скин (2 раза в секунду)
 		if sk.enabled and now - scanAt > 0.5 then
@@ -7665,7 +8933,11 @@ end)()
 				pcall(applyPart, t[1], t[2], t[3])
 			end
 			for part in pairs(applied) do
-				if not part:IsDescendantOf(game) then applied[part] = nil end
+				if not part:IsDescendantOf(game) then
+					applied[part] = nil
+				elseif not (part.Parent and part.Parent:IsA("Tool")) then
+					restore(part) -- стенд на спине (надели раньше) - вернуть родной
+				end
 			end
 		end
 	end)
@@ -7752,51 +9024,6 @@ end)()
 		end)
 	end
 	typePills[sk.listType].set(true)
-
-	-- размер: − Size 100% + (шаг 10%)
-	x += 10
-	local function stepBtn(txt, px)
-		local b = new("TextButton", {
-			Text = txt,
-			Font = Enum.Font.GothamBold,
-			TextSize = 14,
-			TextColor3 = SUB,
-			AutoButtonColor = false,
-			BackgroundColor3 = Color3.fromRGB(90, 90, 90),
-			BackgroundTransparency = 0.85,
-			Position = UDim2.fromOffset(px, 0),
-			Size = UDim2.fromOffset(TOP_H, TOP_H),
-			ZIndex = 3,
-			Parent = topBar,
-		})
-		round(b, 9)
-		bind(b.MouseEnter, function() tween(b, 0.15, { TextColor3 = WHITE, BackgroundTransparency = 0.6 }) end)
-		bind(b.MouseLeave, function() tween(b, 0.15, { TextColor3 = SUB, BackgroundTransparency = 0.85 }) end)
-		return b
-	end
-	local minus = stepBtn("−", x)
-	local sizeLbl = new("TextLabel", {
-		Text = "",
-		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
-		TextColor3 = TEXT,
-		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(x + TOP_H, 0),
-		Size = UDim2.fromOffset(78, TOP_H),
-		ZIndex = 3,
-		Parent = topBar,
-	})
-	local plus = stepBtn("+", x + TOP_H + 78)
-	local function setSize(v, save)
-		sk.size = math.clamp(v, 20, 300)
-		sizeLbl.Text = "Size " .. sk.size .. "%"
-		for _, a in pairs(applied) do a.key = nil end -- перенадеть с новым размером
-		if save then cfgSet("Skin Changer/Size", sk.size) end
-	end
-	setSize(sk.size)
-	bind(minus.MouseButton1Click, function() setSize(sk.size - 10, true) end)
-	bind(plus.MouseButton1Click, function() setSize(sk.size + 10, true) end)
-	cfgReg("Skin Changer/Size", function(v) if type(v) == "number" then setSize(v) end end)
 
 	-- справа сверху: скины вкл/выкл
 	local swBtn = new("TextButton", {
@@ -7885,32 +9112,49 @@ end)()
 		Parent = page,
 	})
 
-	local function indexOf(s)
-		local n = 0
-		for _, c in ipairs(collection) do
-			if c.type == s.type then
-				n += 1
-				if c == s then return n end
-			end
-		end
-		return n
-	end
+	local query = ""
 
 	local function updateInfo()
 		local kn, gn = 0, 0
 		for _, s in ipairs(collection) do
-			if s.type == "Knife" then
-				kn += 1
-			else
-				gn += 1
-			end
+			if s.type == "Knife" then kn += 1 else gn += 1 end
 		end
 		local function cur(ty)
 			local s = byKey[sk.sel[ty]]
-			return s and ("<b><font color=\"#ffffff\">#" .. indexOf(s) .. "</font></b>") or "default"
+			return s and ("<b><font color=\"#ffffff\">" .. s.name .. "</font></b>") or "default"
 		end
-		info.Text = ("collected: %d knives · %d guns     equipped: knife %s · gun %s"):format(kn, gn, cur("Knife"), cur("Gun"))
+		info.Text = ("%d knives · %d guns     knife: %s · gun: %s"):format(kn, gn, cur("Knife"), cur("Gun"))
 	end
+
+	-- поиск по названию (справа в строке инфо)
+	local searchF = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -4, 0, INFO_Y - 3),
+		Size = UDim2.fromOffset(170, 24),
+		BackgroundColor3 = Color3.fromRGB(22, 22, 22),
+		ZIndex = 3,
+		Parent = page,
+	})
+	round(searchF, 8)
+	local searchSt = outline(searchF)
+	local searchBox = new("TextBox", {
+		Text = "",
+		PlaceholderText = "Search skins...",
+		PlaceholderColor3 = DIM,
+		Font = Enum.Font.Gotham,
+		TextSize = 12,
+		TextColor3 = WHITE,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ClearTextOnFocus = false,
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.new(1, -16, 1, 0),
+		ZIndex = 4,
+		Parent = searchF,
+	})
+	info.Size = UDim2.new(1, -190, 0, 20)
+	bind(searchBox.Focused, function() tween(searchSt, 0.2, { Color = Color3.fromRGB(120, 120, 120) }) end)
+	bind(searchBox.FocusLost, function() tween(searchSt, 0.2, { Color = LINE }) end)
 
 	-- сетка
 	local grid = new("ScrollingFrame", {
@@ -7946,9 +9190,10 @@ end)()
 		ZIndex = 3,
 		Parent = page,
 	})
-	bind(layout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+	local function updateCanvas()
 		grid.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 8)
-	end)
+	end
+	bind(layout:GetPropertyChangedSignal("AbsoluteContentSize"), updateCanvas)
 
 	local cards = {}
 
@@ -7968,20 +9213,7 @@ end)()
 		scanAt = 0 -- надеть сразу, не ждать полсекунды
 		c.sc.Scale = 0.93
 		tween(c.sc, 0.35, { Scale = 1 }, Enum.EasingDirection.Out, Enum.EasingStyle.Back)
-		notify(s.type, sk.sel[s.type] and ("skin #" .. indexOf(s) .. " equipped") or "default skin")
-	end
-
-	local function remove(s)
-		for i, c in ipairs(collection) do
-			if c == s then table.remove(collection, i) break end
-		end
-		byKey[s.key] = nil
-		if sk.sel[s.type] == s.key then
-			sk.sel[s.type] = nil
-			cfgSet("Skin Changer/Skins/" .. s.type, false)
-		end
-		saveSoon()
-		rebuild(false)
+		notify(s.type, sk.sel[s.type] and (s.name .. " equipped") or "default skin")
 	end
 
 	local function makeCard(s, order)
@@ -7994,7 +9226,6 @@ end)()
 			Parent = grid,
 		})
 		local sc = new("UIScale", { Parent = card })
-
 		local thumb = new("Frame", {
 			Size = UDim2.new(1, 0, 0, 100),
 			BackgroundColor3 = THUMB,
@@ -8004,57 +9235,16 @@ end)()
 		})
 		round(thumb, 8)
 		local st = outline(thumb)
-
-		-- 3D-превью: сам меш в ViewportFrame, медленно крутится
-		local vp = new("ViewportFrame", {
-			Size = UDim2.fromScale(1, 1),
+		local pic = new("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(84, 84),
 			BackgroundTransparency = 1,
-			Ambient = Color3.fromRGB(170, 170, 170),
-			LightColor = Color3.fromRGB(255, 255, 255),
-			LightDirection = Vector3.new(-1, -1, -1),
+			ScaleType = Enum.ScaleType.Fit,
+			Image = s.img ~= 0 and ("rbxthumb://type=Asset&id=%d&w=150&h=150"):format(s.img) or "",
 			ZIndex = 3,
 			Parent = thumb,
 		})
-		local cam = new("Camera", { FieldOfView = 30, Parent = vp })
-		vp.CurrentCamera = cam
-		local part
-		local live = liveClones[s.key]
-		if live then
-			part = live:Clone()
-			part.Anchored = true
-			-- вписываем в превью
-			part.Size = live.Size * (3.2 / math.max(live.Size.Magnitude, 0.1))
-			part.CFrame = CFrame.new()
-			part.Parent = vp
-		else
-			part = new("Part", { Anchored = true, Size = Vector3.one, CFrame = CFrame.new(), Parent = vp })
-			if s.color then part.Color = Color3.new(s.color[1], s.color[2], s.color[3]) end
-			new("SpecialMesh", {
-				MeshType = Enum.MeshType.FileMesh,
-				MeshId = s.mesh,
-				TextureId = s.tex,
-				Scale = Vector3.new(s.scale[1], s.scale[2], s.scale[3]),
-				Parent = part,
-			})
-		end
-		if s.sa and not live then
-			-- PBR-текстура: без живой копии будет без узора
-			local pb = new("TextLabel", {
-				Text = "NEEDS OWNER",
-				Font = Enum.Font.GothamBold,
-				TextSize = 8,
-				TextColor3 = WHITE,
-				BackgroundColor3 = Color3.fromRGB(60, 60, 64),
-				AnchorPoint = Vector2.new(0, 1),
-				Position = UDim2.new(0, 6, 1, -6),
-				Size = UDim2.fromOffset(70, 14),
-				ZIndex = 5,
-				Parent = thumb,
-			})
-			round(pb, 5)
-		end
-		cam.CFrame = CFrame.lookAt(Vector3.new(0, 0.6, 7), Vector3.zero)
-
 		local badge = new("TextLabel", {
 			Text = "EQUIPPED",
 			Font = Enum.Font.GothamBold,
@@ -8068,40 +9258,6 @@ end)()
 			Parent = thumb,
 		})
 		round(badge, 5)
-
-		if seenThisSession[s.key] then
-			local nb = new("TextLabel", {
-				Text = "NEW",
-				Font = Enum.Font.GothamBold,
-				TextSize = 9,
-				TextColor3 = Color3.fromRGB(10, 10, 10),
-				BackgroundColor3 = Color3.fromRGB(104, 222, 92),
-				AnchorPoint = Vector2.new(1, 1),
-				Position = UDim2.new(1, -6, 1, -6),
-				Size = UDim2.fromOffset(30, 15),
-				ZIndex = 5,
-				Parent = thumb,
-			})
-			round(nb, 5)
-		end
-
-		-- удалить из коллекции
-		local del = new("TextButton", {
-			Text = "×",
-			Font = Enum.Font.GothamBold,
-			TextSize = 16,
-			TextColor3 = SUB,
-			BackgroundTransparency = 1,
-			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -4, 0, 2),
-			Size = UDim2.fromOffset(20, 20),
-			ZIndex = 6,
-			Parent = thumb,
-		})
-		bind(del.MouseEnter, function() tween(del, 0.15, { TextColor3 = WHITE }) end)
-		bind(del.MouseLeave, function() tween(del, 0.15, { TextColor3 = SUB }) end)
-		bind(del.MouseButton1Click, function() remove(s) end)
-
 		local nameBg = new("Frame", {
 			Position = UDim2.fromOffset(0, 106),
 			Size = UDim2.new(1, 0, 1, -106),
@@ -8111,10 +9267,11 @@ end)()
 		})
 		round(nameBg, 8)
 		new("TextLabel", {
-			Text = s.type:upper() .. " #" .. indexOf(s),
+			Text = s.name:upper(),
 			Font = Enum.Font.GothamBold,
 			TextSize = 11,
 			TextColor3 = WHITE,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			BackgroundTransparency = 1,
 			Position = UDim2.fromOffset(6, 5),
 			Size = UDim2.new(1, -12, 0, 15),
@@ -8122,38 +9279,58 @@ end)()
 			Parent = nameBg,
 		})
 		new("TextLabel", {
-			Text = "from " .. tostring(s.from),
+			Text = s.rarity,
 			Font = Enum.Font.GothamMedium,
-			TextSize = 9,
-			TextColor3 = DIM,
-			TextTruncate = Enum.TextTruncate.AtEnd,
+			TextSize = 10,
+			TextColor3 = RCOLOR[s.rarity] or SUB,
+			TextXAlignment = Enum.TextXAlignment.Center,
 			BackgroundTransparency = 1,
 			Position = UDim2.fromOffset(6, 21),
 			Size = UDim2.new(1, -12, 0, 12),
 			ZIndex = 3,
 			Parent = nameBg,
 		})
-
-		local c = { card = card, sc = sc, stroke = st, badge = badge, s = s, part = part, spin = math.random() * 6.28 }
+		local c = { card = card, sc = sc, stroke = st, badge = badge, s = s }
 		table.insert(cards, c)
 		paintCard(c)
-
-		bind(card.MouseEnter, function() tween(thumb, 0.15, { BackgroundColor3 = THUMB_HOVER }) end)
-		bind(card.MouseLeave, function() tween(thumb, 0.15, { BackgroundColor3 = THUMB }) end)
+		bind(card.MouseEnter, function()
+			tween(thumb, 0.15, { BackgroundColor3 = THUMB_HOVER })
+			tween(pic, 0.2, { Size = UDim2.fromOffset(94, 94) }, Enum.EasingDirection.Out, Enum.EasingStyle.Back)
+		end)
+		bind(card.MouseLeave, function()
+			tween(thumb, 0.15, { BackgroundColor3 = THUMB })
+			tween(pic, 0.2, { Size = UDim2.fromOffset(84, 84) })
+		end)
 		bind(card.MouseButton1Click, function() choose(s, c) end)
 	end
+
+	-- карточки подгружаются порциями при прокрутке (900+ скинов)
+	local list, shown = {}, 0
+	local BATCH = 32
+	local function renderMore()
+		local upto = math.min(#list, shown + BATCH)
+		for i = shown + 1, upto do makeCard(list[i], i) end
+		shown = upto
+		updateCanvas()
+	end
+	bind(grid:GetPropertyChangedSignal("CanvasPosition"), function()
+		if shown < #list and grid.CanvasPosition.Y + grid.AbsoluteWindowSize.Y > grid.CanvasSize.Y.Offset - 300 then
+			renderMore()
+		end
+	end)
 
 	rebuild = function(anim)
 		for _, c in ipairs(cards) do c.card:Destroy() end
 		table.clear(cards)
-		local n = 0
+		list, shown = {}, 0
 		for _, s in ipairs(collection) do
-			if s.type == sk.listType then
-				n += 1
-				makeCard(s, n)
+			if s.type == sk.listType and (query == "" or s.name:lower():find(query, 1, true)) then
+				table.insert(list, s)
 			end
 		end
-		empty.Text = n == 0 and "no skins yet. go to the lobby or play a round - skins of other players are collected automatically and saved forever" or ""
+		grid.CanvasPosition = Vector2.zero
+		renderMore()
+		empty.Text = #list == 0 and "nothing found" or ""
 		updateInfo()
 		if anim then
 			grid.Position = UDim2.fromOffset(0, GRID_Y + 12)
@@ -8161,25 +9338,9 @@ end)()
 		end
 	end
 
-	onNewSkin = function(s)
-		if s.type == sk.listType then
-			local n = 0
-			for _, c in ipairs(collection) do
-				if c.type == s.type then n += 1 end
-			end
-			makeCard(s, n)
-			empty.Text = ""
-		end
-		updateInfo()
-	end
-
-	-- превью крутятся, пока вкладка открыта
-	bind(RunService.RenderStepped, function(dt)
-		if not page.Visible or not main.Visible then return end
-		for _, c in ipairs(cards) do
-			c.spin += dt * 0.8
-			c.part.CFrame = CFrame.Angles(0.35, c.spin, 0)
-		end
+	bind(searchBox:GetPropertyChangedSignal("Text"), function()
+		query = searchBox.Text:lower()
+		rebuild(false)
 	end)
 
 	for _, ty in ipairs({ "Knife", "Gun" }) do
@@ -8307,6 +9468,135 @@ end)()
 		spin.on = false
 		stop()
 	end
+end)()
+
+---------------------------------------------------------------- вкладка Troll Fun: Hug (обнимашки)
+-- встаёшь вплотную перед игроком лицом к нему и держишься за ним; играет эмоция Hug из каталога
+-- (UGC-эмоция - её видят все). цель - ближайший игрок, Next player - следующий
+;(function()
+	-- эмоции Hug из каталога: если первая не загрузится, берём следующую
+	local HUG_EMOTES = { 125491951751014, 90892690280238, 88712283515515, 99919046918338, 127717306748023 }
+	local hg = { on = false, target = nil }
+	local track, animId
+
+	local function loadHug()
+		if animId then return animId end
+		for _, id in ipairs(HUG_EMOTES) do
+			local ok, objs = pcall(function() return game:GetObjects("rbxassetid://" .. id) end)
+			if ok and type(objs) == "table" then
+				for _, o in ipairs(objs) do
+					local list = o:GetDescendants()
+					table.insert(list, 1, o)
+					for _, a in ipairs(list) do
+						if a:IsA("Animation") and a.AnimationId ~= "" then
+							animId = a.AnimationId
+							return animId
+						end
+					end
+				end
+			end
+		end
+	end
+
+	local function stopHug()
+		if track then
+			pcall(function() track:Stop(0.25) end)
+			track = nil
+		end
+	end
+
+	local function playHug()
+		local hum = getHum()
+		if not hum then return end
+		task.spawn(function()
+			local id = loadHug()
+			if not id or not hg.on then
+				if not id then notify("Hug", "couldn't load the hug animation") end
+				return
+			end
+			stopHug()
+			local anim = Instance.new("Animation")
+			anim.AnimationId = id
+			local animator = hum:FindFirstChildOfClass("Animator") or hum
+			local ok, tr = pcall(function() return animator:LoadAnimation(anim) end)
+			if ok and tr then
+				tr.Priority = Enum.AnimationPriority.Action4
+				tr.Looped = true
+				tr:Play(0.25)
+				track = tr
+			end
+		end)
+	end
+
+	local function alive(p)
+		local c = p and p.Character
+		local h = c and c:FindFirstChild("HumanoidRootPart")
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if h and hum and hum.Health > 0 then return h end
+	end
+
+	local function nearest(exclude)
+		local me = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not me then return nil end
+		local best, bd
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p ~= exclude then
+				local h = alive(p)
+				if h then
+					local d = (h.Position - me.Position).Magnitude
+					if not bd or d < bd then best, bd = p, d end
+				end
+			end
+		end
+		return best
+	end
+
+	-- держимся перед целью, лицом к ней
+	bind(RunService.Heartbeat, function()
+		if not hg.on then return end
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		local th = alive(hg.target)
+		if not th then
+			hg.target = nearest()
+			th = alive(hg.target)
+			if not th then return end
+			notify("Hug", "hugging " .. hg.target.DisplayName)
+		end
+		local front = th.CFrame * CFrame.new(0, 0, -1.4)
+		hrp.CFrame = CFrame.lookAt(front.Position, Vector3.new(th.Position.X, front.Position.Y, th.Position.Z))
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		if not track then playHug() end
+	end)
+
+	local sec = addSection(tTroll, "Hug")
+	sec:Toggle("Hug", "hug the nearest player - everyone sees it", function(on)
+		hg.on = on
+		if on then
+			hg.target = nearest()
+			if hg.target then
+				notify("Hug", "hugging " .. hg.target.DisplayName)
+				playHug()
+			else
+				notify("Hug", "nobody around")
+			end
+		else
+			stopHug()
+			hg.target = nil
+		end
+	end)
+	sec:Button("Next player", "hug someone else", function()
+		local list = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and alive(p) then table.insert(list, p) end
+		end
+		if #list == 0 then notify("Hug", "nobody around") return end
+		local i = table.find(list, hg.target) or 0
+		hg.target = list[i % #list + 1]
+		notify("Hug", "hugging " .. hg.target.DisplayName)
+	end)
+	table.insert(conns, { Disconnect = function() stopHug() end })
 end)()
 
 ---------------------------------------------------------------- вкладка Vote Dupe Map
@@ -9593,7 +10883,7 @@ end)()
 		if hit then wbMiss = 0 return end
 		wbMiss = wbMiss + 1
 		if wbMiss == 2 then
-			notify("WallBang", "server rejects shots through walls on this game")
+			notify("WallBang", "missed twice through walls - send the shot log")
 		end
 	end
 
@@ -9995,17 +11285,88 @@ end)()
 		local oldMouse, oldTouch = ws.GetMouseTargetCFrame, ws.GetTargetPosition
 		if type(oldMouse) ~= "function" then return end
 
-		local function aimFor(mhrp)
+		-- сервер останавливает пулю о любую деталь (и невидимую - например HumanoidRootPart
+		-- чужих NPC/петов рядом с мардером). выбираем часть тела, до которой луч доходит чисто
+		local PARTS_TORSO = { "UpperTorso", "Torso", "LowerTorso", "Head", "HumanoidRootPart",
+			"RightUpperArm", "LeftUpperArm", "Right Arm", "Left Arm", "RightUpperLeg", "LeftUpperLeg", "Right Leg", "Left Leg" }
+		local PARTS_HEAD = { "Head", "UpperTorso", "Torso", "LowerTorso", "HumanoidRootPart",
+			"RightUpperArm", "LeftUpperArm", "Right Arm", "Left Arm", "RightUpperLeg", "LeftUpperLeg", "Right Leg", "Left Leg" }
+		local rayP = RaycastParams.new()
+		rayP.FilterType = Enum.RaycastFilterType.Exclude
+		-- как WeaponRaycast в игре: детали с тегом WeaponPassthrough пуля пролетает (окна, сетки...)
+		local CS = game:GetService("CollectionService")
+		local passList, passAt = {}, 0
+		local function weaponFilter(...)
+			if os.clock() - passAt > 1 then
+				passAt = os.clock()
+				passList = CS:GetTagged("WeaponPassthrough")
+			end
+			local list = { ... }
+			for _, x in ipairs(passList) do table.insert(list, x) end
+			return list
+		end
+		-- сглаженная скорость мардера: смещение за последние ~0.25с (мгновенная скачет при прыжках/поворотах)
+		local hist = {} -- hrp -> { {t, pos}, ... }
+		bind(RunService.Heartbeat, function()
+			local _, mh = murderer()
+			local now = os.clock()
+			for h in pairs(hist) do
+				if h ~= mh then hist[h] = nil end
+			end
+			if not mh then return end
+			local list = hist[mh] or {}
+			hist[mh] = list
+			table.insert(list, { now, mh.Position })
+			while #list > 2 and now - list[1][1] > 0.5 do table.remove(list, 1) end
+		end)
+		local function smoothVel(mhrp)
+			local list = hist[mhrp]
+			if not list or #list < 2 then return mhrp.AssemblyLinearVelocity end
+			local a, b = list[1], list[#list]
+			local dt = b[1] - a[1]
+			if dt < 0.15 then return mhrp.AssemblyLinearVelocity end
+			return (b[2] - a[2]) / dt
+		end
+		local function aimFor(mhrp, origin)
 			local mchar = mhrp.Parent
 			if isDesynced(Players:GetPlayerFromCharacter(mchar)) then return mhrp.Position end
-			local target = mhrp
-			if sa.part == "Head" then target = mchar:FindFirstChild("Head") or mhrp
-			else target = mchar:FindFirstChild("UpperTorso") or mchar:FindFirstChild("Torso") or mhrp end
-			local v = mhrp.AssemblyLinearVelocity
-			local lead = (sa.pred / 1000)
-			return target.Position + Vector3.new(v.X, v.Y * 0.5, v.Z) * lead
+			local v = smoothVel(mhrp)
+			-- авто: пинг в момент выстрела (полпинга + 50мс); ручной - ползунок
+			local lead = sa.auto and math.clamp(getPing() / 2000 + 0.1, 0, 0.45) or (sa.pred / 1000)
+			-- по горизонтали - сглаженная скорость; по высоте только в воздухе и по физике:
+			-- текущая скорость по Y + гравитация (парабола прыжка/падения), на земле не упреждаем
+			local mhum = mchar:FindFirstChildOfClass("Humanoid")
+			local air = mhum and mhum.FloorMaterial == Enum.Material.Air
+			local dy = 0
+			if air then
+				local vy = mhrp.AssemblyLinearVelocity.Y
+				dy = vy * lead - 0.5 * workspace.Gravity * lead * lead
+				-- не ниже пола: приземлится раньше, чем закончится упреждение
+				if dy < 0 then
+					rayP.FilterDescendantsInstances = weaponFilter(mchar, player.Character, workspace.CurrentCamera)
+					local fl = workspace:Raycast(mhrp.Position, Vector3.new(0, -60, 0), rayP)
+					if fl then dy = math.max(dy, -(mhrp.Position.Y - fl.Position.Y - 3)) end
+				end
+			end
+			local shift = Vector3.new(v.X * lead, dy, v.Z * lead)
+			local first
+			rayP.FilterDescendantsInstances = weaponFilter(player.Character, workspace.CurrentCamera)
+			for _, n in ipairs(sa.part == "Head" and PARTS_HEAD or PARTS_TORSO) do
+				local part = mchar:FindFirstChild(n)
+				if part and part:IsA("BasePart") then
+					local target = part.Position + shift
+					first = first or target
+					if not origin then return target end
+					local dir = target - origin
+					local hit = workspace:Raycast(origin, dir.Unit * (dir.Magnitude + 2), rayP)
+					-- чисто: луч упирается в самого мардера или никуда (точка упреждения в воздухе)
+					if not hit or hit.Instance:IsDescendantOf(mchar) then return target end
+				end
+			end
+			return first or (mhrp.Position + shift)
 		end
 
+		local logLine -- лог выстрелов (ниже)
 		local function watchHit(mchar, through)
 			local mhum = mchar and mchar:FindFirstChildOfClass("Humanoid")
 			if not mhum then return end
@@ -10014,12 +11375,14 @@ end)()
 				while os.clock() - t < 1.2 do
 					if mhum.Health <= 0 or not mhum.Parent then
 						if through then wbResult(true) end
+						logLine(("  RESULT hit (%.2fs)"):format(os.clock() - t))
 						notify("Silent Aimbot", "hit")
 						return
 					end
 					RunService.Heartbeat:Wait()
 				end
 				if through then wbResult(false) end
+				logLine(("  RESULT miss (health %.0f)"):format(mhum.Health))
 				notify("Silent Aimbot", sa.auto and "miss" or "miss - try changing Prediction")
 			end)
 		end
@@ -10027,17 +11390,122 @@ end)()
 		-- redirect вызывает скрипт игры (GunClient) - с его правами: меню, notify и CoreGui оттуда
 		-- недоступны (ошибка = пистолет не стреляет). флаги и уведомления - только через наш Heartbeat
 		local guiOk, pending = true, {}
+		local shotQ, shotLines, lastShotAt = {}, {}, 0
+		local lastFired = 0 -- когда сервер прислал GunFired по нашему пистолету
+		local function vstr(p)
+			if typeof(p) ~= "Vector3" then return tostring(p) end
+			return ("(%.1f, %.1f, %.1f)"):format(p.X, p.Y, p.Z)
+		end
+		logLine = function(s)
+			table.insert(shotLines, os.date("%H:%M:%S ") .. s)
+			while #shotLines > 200 do table.remove(shotLines, 1) end
+			if writefile then pcall(writefile, "peakzone_shots.txt", table.concat(shotLines, "\n")) end
+		end
+		local function argStr(...)
+			local args, out = table.pack(...), {}
+			for i = 1, args.n do
+				local x = args[i]
+				local tx = typeof(x)
+				if tx == "Vector3" then out[i] = vstr(x)
+				elseif tx == "CFrame" then out[i] = "CF" .. vstr(x.Position)
+				elseif tx == "Instance" then out[i] = x:GetFullName()
+				else out[i] = tx .. " " .. tostring(x) end
+			end
+			return table.concat(out, " | ")
+		end
+		-- что сервер рассылает после выстрела: след пули и событие выстрела
+		for _, path in ipairs({ { "WeaponEvents", "GunBeam" }, { "ClientServices", "WeaponService", "GunFired" } }) do
+			task.spawn(function()
+				local node = game:GetService("ReplicatedStorage")
+				for _, n in ipairs(path) do
+					node = node and node:WaitForChild(n, 10)
+				end
+				if node and node:IsA("RemoteEvent") then
+					bind(node.OnClientEvent, function(...)
+						local h = ...
+						local ch = player.Character
+						if node.Name == "GunFired" and typeof(h) == "Instance" and ch and h:IsDescendantOf(ch) then
+							lastFired = os.clock()
+						end
+						if os.clock() - lastShotAt < 2 then
+							local _, mhrp = murderer()
+							logLine(("  SERVER %s: %s | murderer now=%s"):format(node.Name, argStr(...), mhrp and vstr(mhrp.Position) or "none"))
+						end
+					end)
+				end
+			end)
+		end
 		bind(RunService.Heartbeat, function()
 			guiOk = gui.Parent ~= nil
+			while #shotQ > 0 do
+				lastShotAt = os.clock()
+				logLine(table.remove(shotQ, 1))
+			end
 			while #pending > 0 do
 				local job = table.remove(pending, 1)
 				watchHit(job[1], job[2])
 			end
 		end)
 
+		-- чисто ли от точки до мардера так, как считает сервер (невидимые детали тоже мешают)
+		local function clearTo(from, mchar, target)
+			rayP.FilterDescendantsInstances = weaponFilter(player.Character, workspace.CurrentCamera)
+			local d = target - from
+			local hit = workspace:Raycast(from, d.Unit * (d.Magnitude + 2), rayP)
+			return not hit or hit.Instance:IsDescendantOf(mchar)
+		end
+		local function openPart(mchar, from)
+			for _, n in ipairs(PARTS_TORSO) do
+				local part = mchar:FindFirstChild(n)
+				if part and part:IsA("BasePart") and clearTo(from, mchar, part.Position) then return true end
+			end
+			return false
+		end
+		-- как CantShoot в игре: от головы (центра) до точки вылета пули не должно быть стены.
+		-- луч изнутри детали её не видит, поэтому отдельная проверка - иначе ствол "в стене" не замечаем
+		local function muzzleBlocked(from, muzzle)
+			rayP.FilterDescendantsInstances = weaponFilter(player.Character, workspace.CurrentCamera)
+			local d = muzzle - from
+			if d.Magnitude < 0.05 then return false end
+			return workspace:Raycast(from, d, rayP) ~= nil
+		end
+		-- Direct WallBang: точка вылета пули в 3-7 от мардера, откуда он открыт (сами никуда не двигаемся)
+		local function directPoint(mhrp, from0)
+			local mchar = mhrp.Parent
+			local toUs = from0 - mhrp.Position
+			local base = math.atan2(toUs.Z, toUs.X)
+			for _, dist in ipairs({ 3, 5, 7 }) do
+				for k = 0, 11 do
+					local ang = base + (k % 2 == 0 and 1 or -1) * math.ceil(k / 2) * (math.pi / 6)
+					for _, h in ipairs({ 1.5, 3.5 }) do
+						local p = mhrp.Position + Vector3.new(math.cos(ang) * dist, h, math.sin(ang) * dist)
+						if clearTo(p, mchar, mhrp.Position) and openPart(mchar, p) then return p end
+					end
+				end
+			end
+		end
+
 		local function redirect(res)
 			wsLastCall = os.clock()
-			if not ((sa.on or os.clock() < wsForceUntil) and guiOk) or busy then return res end
+			if not ((sa.on or os.clock() < wsForceUntil) and guiOk) then return res end
+			if busy then
+				-- идёт WallBang, а ты кликнул ещё раз: этот выстрел тоже в мардера (раньше улетал в курсор
+				-- и приходил на сервер раньше нашего - наш потом отбрасывал кулдаун пистолета)
+				local _, mh = murderer()
+				local at = gunAttach()
+				if not mh or not at or typeof(res) ~= "CFrame" then return res end
+				local aimB = aimFor(mh, at.WorldPosition)
+				local dB = aimB - at.WorldPosition
+				if dB.Magnitude < 0.01 then return res end
+				return CFrame.lookAt(aimB, aimB + dB.Unit)
+			end
+			-- десинк только что подменял позицию (пистолет достали сразу после) - сервер ещё видит фейк:
+			-- ждём, пока до него дойдёт настоящая позиция
+			local fakeAt = DS.lastFakeAt or 0
+			if os.clock() - fakeAt < 0.6 then
+				local untilT = fakeAt + math.clamp(getPing() / 2000, 0.02, 0.25) + 3 / 60
+				while os.clock() < untilT do RunService.Heartbeat:Wait() end
+			end
 			local _, mhrp = murderer()
 			local char = player.Character
 			local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -10045,19 +11513,64 @@ end)()
 			if not mhrp or not hrp or not hum then return res end
 			local a = gunAttach()
 			local from0 = a and a.WorldPosition or hrp.Position
+			-- стена: сервер стреляет от твоей позиции на сервере, подмену точки отклоняет. поэтому
+			-- прыгаем в открытую точку, ждём, пока сервер её получит, стреляем и держим точку до GunFired
 			local through = false
-			if sa.wallbang and a and wallBetween(from0, mhrp.Position) then
-				-- стена: персонаж стоит на месте, на один выстрел переносим только точку выстрела
-				-- (GunRaycastAttachment) к мардеру - пистолет читает её сразу после нас
-				through = true
-				local back = a.CFrame
-				a.WorldPosition = spoofPoint(mhrp, from0)
-				task.defer(function()
-					if a.Parent then a.CFrame = back end
-				end)
+			local head = char:FindFirstChild("Head")
+			local stuck = muzzleBlocked(head and head.Position or hrp.Position, from0) or muzzleBlocked(hrp.Position, from0)
+			local open = openPart(mhrp.Parent, from0)
+			-- вплотную (ближе 6) "тело закрыто" срабатывало ложно, а ожидание WallBang только мешает
+			if not open and not stuck and (mhrp.Position - from0).Magnitude < 6 then open = true end
+			local why = (stuck and "muzzle-in-wall " or "") .. (open and "" or "body-covered")
+			-- выстрел вдоль пути: сервер берёт начало выстрела у клиента и ведёт луч на 900 студов через
+			-- цель. мардер бежит по земле - начало в 6 позади него на линии бега (стены между вами не
+			-- важны), луч вперёд по ходу: перебор/недобор упреждения вдоль бега уже не важен
+			local pathed = false
+			if a then
+				local mchar = mhrp.Parent
+				local mh = mchar:FindFirstChildOfClass("Humanoid")
+				local grounded = mh and mh.FloorMaterial ~= Enum.Material.Air
+				local vs = smoothVel(mhrp)
+				local vh = Vector3.new(vs.X, 0, vs.Z)
+				if grounded and vh.Magnitude > 4 and (sa.wallbang or (not stuck and open)) then
+					local aimP = aimFor(mhrp, nil)
+					local o = aimP - vh.Unit * 6
+					-- от начала до мардера чисто (и без других игроков - чтобы не убить невиновного)
+					if clearTo(o, mchar, aimP) and clearTo(o, mchar, mhrp.Position) then
+						pathed = true
+						through = stuck or not open
+						why = why .. " path"
+						local back = a.CFrame
+						a.WorldPosition = o
+						task.defer(function()
+							if a.Parent then a.CFrame = back end
+						end)
+						from0 = o
+					end
+				end
 			end
-			local aim = aimFor(mhrp)
+			if not pathed and sa.wallbang and (stuck or not open) and a then
+				-- Direct: без десинка - подставляем только точку вылета пули (пистолет читает её сразу после нас)
+				local p = directPoint(mhrp, from0)
+				if p then
+					through = true
+					why = why .. " direct"
+					local back = a.CFrame
+					a.WorldPosition = p
+					task.defer(function()
+						if a.Parent then a.CFrame = back end
+					end)
+					from0 = p
+				end
+			end
+			local aim = aimFor(mhrp, from0)
 			table.insert(pending, { mhrp.Parent, through })
+			-- лог выстрела (пишется в peakzone_shots.txt из нашего потока)
+			local v = mhrp.AssemblyLinearVelocity
+			local rp = typeof(res) == "CFrame" and res.Position or res
+			table.insert(shotQ, ("SHOT ping=%dms lead=%dms wall=%s wb=%s(%s) | origin=%s | aim=%s | murderer=%s vel=%s dist=%.1f | cursor=%s"):format(
+				getPing(), sa.pred, tostring(wallBetween(from0, mhrp.Position)), tostring(through), why, vstr(from0), vstr(aim), vstr(mhrp.Position),
+				vstr(v), (mhrp.Position - from0).Magnitude, vstr(rp)))
 			if typeof(res) == "Vector3" then return aim end
 			-- позиция - мардер, направление - от точки выстрела на него (не от курсора)
 			local origin = (a and a.WorldPosition) or from0
@@ -10103,10 +11616,10 @@ end)()
 	end)
 	wbT.Set(true, true)
 	local predS
-	-- Auto prediction: раз в секунду Prediction = пинг + 100мс (задержка до сервера + интерполяция),
+	-- Auto prediction: раз в секунду Prediction = полпинга + 50мс (по логам: пинг + 100 давал перелёт),
 	-- ползунок двигается сам
 	local function autoPred()
-		local v = math.clamp(math.floor((getPing() + 100) / 10 + 0.5) * 10, 0, 700)
+		local v = math.clamp(math.floor((getPing() / 2 + 100) / 10 + 0.5) * 10, 0, 700)
 		sa.pred = v
 		if predS then predS.Set(v, true) end
 	end
@@ -11507,6 +13020,8 @@ _G.PeakZoneUnload = function()
 	if modelsOff then pcall(modelsOff) end
 	if avatarOff then pcall(avatarOff) end
 	if orbsOff then pcall(orbsOff) end
+	if skyWormsOff then pcall(skyWormsOff) end
+	if cursorsOff then pcall(cursorsOff) end
 	if gunSkinOff then pcall(gunSkinOff) end
 	if skinOff then pcall(skinOff) end
 	if cfgDirty then cfgWrite() end
